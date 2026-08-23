@@ -1,0 +1,9 @@
+{
+  "name": "@eventverse/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "vite", "build": "vite build" },
+  "dependencies": { "vue": "^3.5.0" },
+  "devDependencies": { "vite": "^6.0.0", "@vitejs/plugin-vue": "^5.2.0", "typescript": "^5.6.0" }
+}

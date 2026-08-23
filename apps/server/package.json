@@ -1,0 +1,9 @@
+{
+  "name": "@eventverse/server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": { "build": "tsc -p tsconfig.json", "start": "node dist/index.js" },
+  "dependencies": { "@eventverse/core": "*", "@eventverse/engine": "*", "@eventverse/adapters": "*" },
+  "devDependencies": { "typescript": "^5.6.0", "@types/node": "^24.0.0" }
+}

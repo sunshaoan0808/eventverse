@@ -1,0 +1,10 @@
+{
+  "name": "@eventverse/adapters",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc -p tsconfig.json", "test": "vitest run" },
+  "dependencies": { "@eventverse/core": "*" },
+  "devDependencies": { "typescript": "^5.6.0", "vitest": "^3.0.0" }
+}

@@ -1,0 +1,11 @@
+services:
+  eventverse:
+    build: .
+    ports:
+      - "127.0.0.1:18700:18700"
+    volumes:
+      - ./data:/app/data
+    environment:
+      EVENTVERSE_HOST: 0.0.0.0
+      EVENTVERSE_PORT: "18700"
+    restart: unless-stopped

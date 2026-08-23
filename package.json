@@ -1,0 +1,21 @@
+{
+  "name": "eventverse",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @eventverse/core && npm run build -w @eventverse/adapters && npm run build -w @eventverse/engine && npm run build -w @eventverse/server",
+    "test": "npm run test -w @eventverse/core && npm run test -w @eventverse/engine",
+    "start": "npm run start -w @eventverse/server",
+    "dev:web": "npm run dev -w @eventverse/web"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.6.3",
+    "vitest": "^3.0.0"
+  }
+}
