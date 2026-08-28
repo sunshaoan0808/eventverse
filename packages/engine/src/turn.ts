@@ -129,7 +129,9 @@ export async function runRpTurn(deps: EngineDeps, session: ChatSession, userMess
   const rendererP = deps.rendererProvider();
   const charName = profile.charId ? (stateBefore.characters[profile.charId]?.name ?? null) : null;
   const focusName = profile.focusCharId ? (stateBefore.characters[profile.focusCharId]?.name ?? null) : null;
-  const visibleState = profile.charId ? store.stateVisibleTo(worldId, profile.charId) : stateBefore;
+  // in_scene（MD §9 补遗）：在场集合 = 与玩家同位置者；秘密的"当场发生"事实对同场者临时可见
+  const present = presentCharsAt(stateBefore, profile.charId);
+  const visibleState = profile.charId ? store.stateVisibleTo(worldId, profile.charId, undefined, present) : stateBefore;
   const rendererRes = await callLLM(rendererP, [
     { role: 'system', content: rendererSystemPrompt({ charName, focusCharName: focusName, styleAnchor: styleAnchorFrom(ws, store, session.workId, profile.styleAnchorFrom), guidance, contentTier: profile.contentTier }) },
     { role: 'user', content: `【导演 beat】\n${beats.map((b, i) => `${i + 1}. ${b}`).join('\n')}\n\n【你的可见世界】\n${contextBrief(visibleState)}${packCtx}\n\n【玩家输入】\n${userMessage}\n\n请渲染本回合正文。` },
@@ -142,14 +144,17 @@ export async function runRpTurn(deps: EngineDeps, session: ChatSession, userMess
   const prose = analyzeProse(content);
   emit({ type: 'prose', data: prose });
   if (prose.verdict === 'flat') {
-    const retry = await callLLM(rendererP, [
-      { role: 'system', content: rendererSystemPrompt({ charName, focusCharName: focusName, styleAnchor: styleAnchorFrom(ws, store, session.workId, profile.styleAnchorFrom), guidance, contentTier: profile.contentTier }) },
-      { role: 'user', content: `【上一版被判平淡：${prose.issues.join('；')}】请重写，句长拉开差距、删掉所有陈词：\n${content}` },
-    ], { temperature: 1.05, maxTokens: 3000 });
-    logUsage(deps, worldId, 'renderer-retry', rendererP, retry.usage);
-    if (analyzeProse(retry.content).verdict !== 'flat') {
-      emit({ type: 'content', data: retry.content });
-      return finishTurn(deps, session, userMessage, retry.content, beat, prose, emit, options);
+    // 横排重写（MD §3.4 完整版）：多候选并行，检测器选优
+    const sys = rendererSystemPrompt({ charName, focusCharName: focusName, styleAnchor: styleAnchorFrom(ws, store, session.workId, profile.styleAnchorFrom), guidance, contentTier: profile.contentTier });
+    const { picked, candidates } = await horizontalRewrite(deps, {
+      system: sys,
+      user: `【上一版被判平淡：${prose.issues.join('；')}】beat 不变，重写正文——句长拉开差距、删掉所有陈词：\n${content}`,
+    });
+    emit({ type: 'rewrite_candidates', data: candidates.map(c => ({ label: c.label, verdict: c.metrics.verdict, aiCliche: c.metrics.aiClicheDensity })) });
+    logUsage(deps, worldId, 'renderer-retry', rendererP, { inputTokens: 0, outputTokens: 0 });
+    if (picked && picked.metrics.verdict !== 'flat') {
+      emit({ type: 'content', data: picked.text });
+      return finishTurn(deps, session, userMessage, picked.text, beat, picked.metrics, emit, options);
     }
   }
   return finishTurn(deps, session, userMessage, content, beat, prose, emit, options);
@@ -273,6 +278,99 @@ function contextBrief(state: any): string {
 
 function logUsage(deps: EngineDeps, worldId: string, role: string, p: ProviderConfig, u: { inputTokens: number; outputTokens: number }) {
   deps.store.logUsage({ worldId, role, model: p.model, inputTokens: u.inputTokens, outputTokens: u.outputTokens, costUsd: estimateCostUsd(p, u.inputTokens, u.outputTokens) });
+}
+
+// ---------- 多模型横排重写（MD §3.4 完整版：多候选并行，确定性检测器选优） ----------
+
+export interface RewriteCandidate { label: string; text: string; metrics: ReturnType<typeof analyzeProse> }
+
+export async function horizontalRewrite(
+  deps: EngineDeps, base: { system: string; user: string }, count = 3,
+): Promise<{ picked: RewriteCandidate | null; candidates: RewriteCandidate[] }> {
+  const providers = [deps.rendererProvider(), deps.rendererProvider(), deps.adversarialProvider()];
+  const temps = [1.05, 1.25, 1.15];
+  const jobs = providers.slice(0, count).map(async (p, i) => {
+    const res = await callLLM(p, [
+      { role: 'system', content: base.system },
+      { role: 'user', content: base.user },
+    ], { temperature: temps[i] ?? 1.1, maxTokens: 3000 });
+    logUsage(deps, '', 'rewrite-candidate', p, res.usage);
+    return { label: `${p.role}@t${temps[i] ?? 1.1}`, text: res.content.trim(), metrics: analyzeProse(res.content) } as RewriteCandidate;
+  });
+  const candidates = (await Promise.allSettled(jobs))
+    .filter((r): r is PromiseFulfilledResult<RewriteCandidate> => r.status === 'fulfilled')
+    .map(r => r.value);
+  const score = (c: RewriteCandidate) =>
+    (c.metrics.verdict === 'good' ? 3 : c.metrics.verdict === 'ok' ? 1 : 0) * 1000
+    + c.metrics.lexicalDiversity * 100 - c.metrics.aiClicheDensity;
+  const picked = [...candidates].sort((a, b) => score(b) - score(a))[0] ?? null;
+  return { picked, candidates };
+}
+
+// ---------- in_scene 实装（MD §9 补遗）：从完整状态推导在场者 ----------
+
+/** 在场集合 = 与玩家同位置的角色。秘密事件标 in_scene:auto 时对同场者临时互见。 */
+export function presentCharsAt(fullState: any, viewerCharId: string | null): Set<string> {
+  const set = new Set<string>();
+  if (!viewerCharId) return set;
+  const place = fullState?.locations?.[viewerCharId];
+  set.add(viewerCharId);
+  if (!place) return set;
+  for (const [cid, p] of Object.entries(fullState?.locations ?? {})) if (p === place) set.add(cid);
+  return set;
+}
+
+// ---------- 世界级指标聚合（MD §9.4：千回合 idle 率 / 文风分布） ----------
+
+export interface WorldMetrics {
+  turns: number; idleTurns: number; idlePerMill: number;
+  prose: { good: number; ok: number; flat: number };
+  sessions: number;
+}
+
+export function worldMetrics(sessions: any[]): WorldMetrics {
+  let turns = 0, idle = 0;
+  const prose = { good: 0, ok: 0, flat: 0 };
+  for (const s of sessions) {
+    for (const t of s.turns ?? []) {
+      if (t.role !== 'assistant') continue;
+      turns++;
+      const m = t.meta ?? {};
+      if (m.idle) idle++;
+      if (m.prose?.verdict === 'good') prose.good++;
+      else if (m.prose?.verdict === 'ok') prose.ok++;
+      else if (m.prose?.verdict) prose.flat++;
+    }
+  }
+  return { turns, idleTurns: idle, idlePerMill: turns ? Math.round((idle / turns) * 1000) : 0, prose, sessions: sessions.length };
+}
+
+// ---------- 红队泄漏扫描（MD §9.2：可见性过滤层量化，泄漏率应为 0） ----------
+
+export interface RedTeamReport { attempts: number; leaks: number; leakRatePerMill: number; details: string[] }
+
+/** 对每个秘密事实 × 每个非知情角色：stateVisibleTo 是否仍暴露。模型层泄漏无法离线量化，此套覆盖过滤器层。 */
+export function redTeamScan(store: EventStore, worldId: string): RedTeamReport {
+  const events = store.listEvents(worldId);
+  const state = store.stateAt(worldId);
+  const chars = Object.keys(state.characters);
+  let attempts = 0, leaks = 0;
+  const details: string[] = [];
+  for (const e of events) {
+    if (e.meta || e.supersededBy) continue;
+    const v = e.visibility;
+    if (v.knowers === '*' || v.inScene === 'auto') continue; // 公开/在场项不测
+    const key = (e.payload as any)?.key;
+    if (key == null) continue;
+    for (const cid of chars) {
+      if ((v.knowers as string[]).includes(cid)) continue;
+      attempts++;
+      const vis = store.stateVisibleTo(worldId, cid);
+      const exposed = vis.facts.some(f => f.key === key && f.value === (e.payload as any).value);
+      if (exposed) { leaks++; details.push(`${state.characters[cid]?.name} 不应知道 ${key} 却可见`); }
+    }
+  }
+  return { attempts, leaks, leakRatePerMill: attempts ? Math.round((leaks / attempts) * 1000) : 0, details };
 }
 
 // ---------- 写作模式（MD 5.2）：大纲 → beat → 草稿 →（作者圈改）→ 定稿同步 ----------

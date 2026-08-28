@@ -207,8 +207,8 @@ export class EventStore {
   stateAt(worldId: string, upto?: { worldTime?: number; sequence?: number }): WorldState {
     return replay(this.listEvents(worldId), worldId, upto);
   }
-  stateVisibleTo(worldId: string, viewerCharId: string, upto?: { worldTime?: number }): WorldState {
-    return replayVisible(this.listEvents(worldId), worldId, viewerCharId, upto);
+  stateVisibleTo(worldId: string, viewerCharId: string, upto?: { worldTime?: number }, present?: Set<string>): WorldState {
+    return replayVisible(this.listEvents(worldId), worldId, viewerCharId, upto, present);
   }
   diff(worldId: string, a: { worldTime?: number; sequence?: number }, b: { worldTime?: number; sequence?: number }): StateDiff {
     return diffStates(this.stateAt(worldId, a), this.stateAt(worldId, b));
@@ -316,6 +316,26 @@ export class EventStore {
       }));
     }
     return out;
+  }
+
+  // ---------- schema 迁移（MD §14.3：v1→v2 演练；只加不改原则的示例映射） ----------
+
+  /** 把 v1 旧事件迁移到 v2（kind 别名归一）。幂等：已 v2 的行不动。 */
+  migrateLegacyEvents(worldId?: string): { migrated: number } {
+    const rows = worldId
+      ? this.db.prepare('SELECT id, kind, schema_ver FROM events WHERE schema_ver < ? AND world_id=?').all(SCHEMA_VER, worldId) as any[]
+      : this.db.prepare('SELECT id, kind, schema_ver FROM events WHERE schema_ver < ?').all(SCHEMA_VER) as any[];
+    const ALIAS: Record<string, string> = {
+      'character.create': 'char.create', 'character.update': 'char.update', 'character.death': 'char.death',
+      'move': 'location.move', 'set_fact': 'fact.set', 'set_relation': 'relation.set',
+    };
+    const upd = this.db.prepare('UPDATE events SET kind=?, schema_ver=? WHERE id=?');
+    let n = 0;
+    for (const r of rows) {
+      upd.run(ALIAS[r.kind] ?? r.kind, SCHEMA_VER, r.id);
+      n++;
+    }
+    return { migrated: n };
   }
 
   // ---------- usage / cost（MD 6 成本透明） ----------

@@ -167,6 +167,16 @@ async function resumeJob(j: any) {
   alert(`已从第 ${(r as any).cursor + 1} 章续跑：${(r as any).jobId}`);
   await loadUsage();
 }
+
+// 质量指标 + 红队
+const metrics = ref<any>(null);
+const redteam = ref<any>(null);
+async function loadMetrics() {
+  metrics.value = await api(`/api/worlds/${props.worldId}/metrics`);
+}
+async function runRedteam() {
+  redteam.value = await api(`/api/worlds/${props.worldId}/redteam`);
+}
 // 自进化（MD 3.5：仅元层，链式可回滚）
 const evolveProposal = ref<any>(null);
 const evolveHistory = ref<any[]>([]);
@@ -527,6 +537,28 @@ const unrecovered = computed(() => (state.value?.foreshadowings ?? []).filter((f
           </tr>
         </table>
         <div v-if="!gate.roles?.length" class="empty">暂无数据</div>
+      </div>
+      <div class="card">
+        <h3>📊 回合质量指标（千回合 idle 率 / 文风分布）+ 红队泄漏扫描</h3>
+        <div class="row" style="margin-bottom:8px">
+          <button @click="loadMetrics">刷新指标</button>
+          <button @click="runRedteam">🛡 红队扫描</button>
+          <span class="dimmer">idle 率验收线 &lt;150‰（MD §9.4）；红队泄漏率应为 0‰</span>
+        </div>
+        <div v-if="metrics" class="row">
+          <span class="tag">会话 {{ metrics.sessions }}</span>
+          <span class="tag">回合 {{ metrics.turns }}</span>
+          <span class="tag" :class="metrics.idlePerMill < 150 ? 'ok' : 'warn'">idle {{ metrics.idlePerMill }}‰（{{ metrics.idleTurns }} 回合）</span>
+          <span class="tag ok">文风 good {{ metrics.prose.good }}</span>
+          <span class="tag warn">ok {{ metrics.prose.ok }}</span>
+          <span class="tag bad">flat {{ metrics.prose.flat }}</span>
+        </div>
+        <div v-if="redteam" class="row" style="margin-top:8px">
+          <span class="tag" :class="redteam.leakRatePerMill === 0 ? 'ok' : 'bad'">
+            泄漏率 {{ redteam.leakRatePerMill }}‰（{{ redteam.leaks }}/{{ redteam.attempts }} 次试探）
+          </span>
+          <span v-for="d in redteam.details.slice(0, 5)" :key="d" class="tag bad">{{ d }}</span>
+        </div>
       </div>
       <div class="card">
         <h3>🧾 导入任务（断点续跑）</h3>

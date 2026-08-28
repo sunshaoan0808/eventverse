@@ -1,0 +1,45 @@
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mC:/Users/cs14ilike/.zcode/workspace/default/eventverse/packages/engine[39m
+
+ [31m❯[39m src/quality.test.ts [2m([22m[2m10 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[33m 446[2mms[22m[39m
+[31m   [31m×[31m 一致性基准集 ×3（MD §9.1：中英各一）[2m > [22m《mine-novel-1-cn.txt》：死亡召回 + 复生悖论捕获 + 关系矛盾检出[39m[32m 88[2mms[22m[39m
+[31m     → expected false to be true // Object.is equality[39m
+[31m   [31m×[31m 一致性基准集 ×3（MD §9.1：中英各一）[2m > [22m《mine-novel-2-cn.txt》：死亡召回 + 复生悖论捕获 + 关系矛盾检出[39m[32m 67[2mms[22m[39m
+[31m     → expected false to be true // Object.is equality[39m
+   [32m✓[39m 一致性基准集 ×3（MD §9.1：中英各一）[2m > [22m《mine-novel-3-en.txt》：死亡召回 + 复生悖论捕获 + 关系矛盾检出[32m 73[2mms[22m[39m
+   [32m✓[39m 自进化回归门（MD §9.3）[2m > [22m题库基线：mock 抽取器全过[32m 29[2mms[22m[39m
+   [32m✓[39m 自进化回归门（MD §9.3）[2m > [22m退化覆盖被自动拒绝[32m 30[2mms[22m[39m
+   [32m✓[39m 横排重写（MD §3.4）[2m > [22m多候选产出且按检测器选优[32m 36[2mms[22m[39m
+   [32m✓[39m in_scene 在场互见（MD §9 补遗）[2m > [22m同位置者可见 in_scene 秘密，异位置者不可见[32m 40[2mms[22m[39m
+   [32m✓[39m 指标聚合与红队扫描（MD §9.2/9.4）[2m > [22m千回合 idle 率与文风分布[32m 27[2mms[22m[39m
+   [32m✓[39m 指标聚合与红队扫描（MD §9.2/9.4）[2m > [22m红队：秘密事实对非知情者泄漏率为 0[32m 28[2mms[22m[39m
+   [32m✓[39m schema 迁移演练（MD §14.3）[2m > [22mv1 别名 kind 迁移到 v2 且幂等[32m 25[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/quality.test.ts[2m > [22m一致性基准集 ×3（MD §9.1：中英各一）[2m > [22m《mine-novel-1-cn.txt》：死亡召回 + 复生悖论捕获 + 关系矛盾检出
+[41m[1m FAIL [22m[49m src/quality.test.ts[2m > [22m一致性基准集 ×3（MD §9.1：中英各一）[2m > [22m《mine-novel-2-cn.txt》：死亡召回 + 复生悖论捕获 + 关系矛盾检出
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m src/quality.test.ts:[2m77:55[22m[39m
+    [90m 75| [39m        { worldId: 'w', actor: 'agent', worldTime: 5, kind: 'relation.…
+    [90m 76| [39m      ])[33m;[39m
+    [90m 77| [39m      [34mexpect[39m(p2[33m.[39missues[33m.[39m[34msome[39m(i [33m=>[39m i[33m.[39m[34mincludes[39m([32m'关系矛盾'[39m)))[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m   | [39m                                                      [31m^[39m
+    [90m 78| [39m    } [35mfinally[39m {
+    [90m 79| [39m      mockScripts[33m.[39mlength [33m=[39m [34m0[39m[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m8 passed[39m[22m[90m (10)[39m
+[2m   Start at [22m 21:37:09
+[2m   Duration [22m 1.75s[2m (transform 365ms, setup 0ms, collect 469ms, tests 446ms, environment 0ms, prepare 261ms)[22m
+

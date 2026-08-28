@@ -82,12 +82,14 @@ export function replay(events: WorldEvent[], worldId: string, upto?: { worldTime
   return s;
 }
 
-/** 可见性过滤：只重放对 viewer 可见的事件（recall 工具的服务端实现） */
-export function replayVisible(events: WorldEvent[], worldId: string, viewerCharId: string, upto?: { worldTime?: number }): WorldState {
+/** 可见性过滤：只重放对 viewer 可见的事件（recall 工具的服务端实现）。
+ * present：在场角色集合（in_scene=auto 的事件对在场者临时可见，MD §9 补遗 in_scene 实装） */
+export function replayVisible(events: WorldEvent[], worldId: string, viewerCharId: string, upto?: { worldTime?: number }, present?: Set<string>): WorldState {
   const visible = events.filter(e => {
     if (e.worldId !== worldId) return false;
     const v = e.visibility;
     if (v.knowers === '*') return true;
+    if (v.inScene === 'auto' && present?.has(viewerCharId)) return true; // 同场互见
     if (v.knowers.includes(viewerCharId)) {
       if (v.sinceEvent && e.sequence < v.sinceEvent) return false;
       return true;

@@ -44,7 +44,12 @@ npm run test -w @eventverse/adapters   # 适配器 13 单测
 | 🃏 ST 生态 | 角色卡 v2/v3 JSON + PNG tEXt 内嵌卡导入；世界书双向导出 | 书架 |
 | 🧭 Guidance | 用户期望锚点，注入导演/渲染 prompt | 工作台·Guidance |
 | ⚙️ 模型层 | OpenAI CC + Anthropic Messages 双协议；五角色（渲染/导演/抽取/对抗审/聊天）独立配模型；API Key AES-256-GCM 加密落盘 | 模型设置 |
-| 💰 成本透明 | 按角色统计 token 用量报表 | 工作台·用量 |
+| 💰 成本透明 | 按角色统计 token 用量报表；**成本基线 + 涨幅 >20% 审批门**（`/usage/baseline` + `/usage/gate`） | 工作台·用量 |
+| 🧪 质量工程 | **一致性基准集**（3 部埋雷小说中英，`testdata/`）、**红队泄漏扫描**（秘密×非知情全组合，泄漏率‰）、**回合指标**（千回合 idle 率/文风分布）、**关系矛盾检测器**（亲属/恋人/敌对互斥，中英） | 单测 + 工作台·用量 |
+| 🔄 横排重写 | 平淡正文多候选并行（多 provider×温度），确定性检测器选优 | 回合内自动 |
+| 🚪 回归门 | 元层自进化覆盖须过固定题库（前/后 A/B），退化自动拒绝 | evolve 流程 |
+| 👥 in_scene 同场互见 | 秘密事件标 `inScene:auto` 时对同位置角色临时可见 | 可见性层 |
+| 🗄 schema 迁移 | v1→v2 事件迁移器（幂等），`/api/migrate/legacy-events` | 运维 |
 | 📱 PWA | manifest + 图标，可安装到手机主屏 | 浏览器 |
 
 ## 架构（npm workspaces monorepo）

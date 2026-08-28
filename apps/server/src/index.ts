@@ -5,7 +5,7 @@ import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { EventStore, NewEventInput } from '@eventverse/core';
-import { Workspace, JobRegistry, EngineDeps, runRpTurn, runWriteDraft, rewriteSelection, finalizeChapter, runToolChat, importNovel, ToolContext, funnelModeFor, autoValidate, normalizeRefs } from '@eventverse/engine';
+import { Workspace, JobRegistry, EngineDeps, runRpTurn, runWriteDraft, rewriteSelection, finalizeChapter, runToolChat, importNovel, ToolContext, funnelModeFor, autoValidate, normalizeRefs, regressionGate, worldMetrics, redTeamScan } from '@eventverse/engine';
 import { PackStore, StoryPack, packPlayable, newPackId, newNodeId } from '@eventverse/engine';
 import { parseSTCard, extractCardFromPng, normalizeWorldBook, exportWorldBookFromFacts, ProviderConfig, newId, timeLabel, callLLM, extractJson } from '@eventverse/adapters';
 
@@ -185,6 +185,18 @@ function serveStatic(pathname: string, res: ServerResponse, query?: URLSearchPar
 }
 
 // ---------------- 业务路由 ----------------
+
+// 世界级指标（千回合 idle 率 / 文风分布）与红队泄漏扫描（MD §9.2/9.4）
+route('GET', '/api/worlds/:id/metrics', ctx => {
+  json(ctx.res, worldMetrics(ws.listSessions(ctx.params.id)));
+});
+route('GET', '/api/worlds/:id/redteam', ctx => {
+  json(ctx.res, redTeamScan(store, ctx.params.id));
+});
+// schema 迁移演练端点（幂等）
+route('POST', '/api/migrate/legacy-events', ctx => {
+  json(ctx.res, store.migrateLegacyEvents(ctx.body?.worldId ?? undefined));
+});
 
 route('GET', '/api/health', ctx => json(ctx.res, { ok: true, version: '1.0.0', worlds: store.listWorlds().length, funnelDemo: funnelModeFor(store, 'demo') }));
 
@@ -490,6 +502,14 @@ route('POST', '/api/worlds/:id/evolve', async ctx => {
     if (!j?.patch) { sseSend(ctx.res, 'error', { message: '未产出有效 patch' }); ctx.res.end(); return; }
     sseSend(ctx.res, 'evolve_proposal', { reason: j.reason, patch: j.patch, serves: j.serves });
     if (ctx.body.autoApply) {
+      // 回归门（MD §9.3）：覆盖前后各跑固定题库，退化则拒绝应用
+      const current = store.latestPromptOverride(worldId, 'extractor');
+      const gate = await regressionGate(p, current, String(j.patch));
+      sseSend(ctx.res, 'regression_gate', gate);
+      if (!gate.pass) {
+        sseSend(ctx.res, 'error', { message: `回归门未通过（题库得分 ${gate.before} → ${gate.after}），已自动拒绝应用` });
+        return void ctx.res.end();
+      }
       const r = store.savePromptOverride(worldId, 'extractor', String(j.patch));
       store.append({ worldId, actor: 'system', kind: 'meta.note', meta: true, worldTime: store.stateAt(worldId).asOf.worldTime === -Infinity ? 1000 : store.stateAt(worldId).asOf.worldTime, payload: { text: `元层自进化：追加抽取器覆盖（服务 ${j.serves ?? '未注明'}）` }, review: { status: 'approved', by: 'evolve' } });
       sseSend(ctx.res, 'applied', r);

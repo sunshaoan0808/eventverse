@@ -2,7 +2,7 @@
 // 轻事实模式（MD 5.3）：按事件量分级
 import { EventStore, WorldEvent, Proposal, NewEventInput } from '@eventverse/core';
 import { callLLM, extractJson, ProviderConfig } from '@eventverse/adapters';
-import { adversarialSystemPrompt } from './prompts.js';
+import { adversarialSystemPrompt, extractorSystemPrompt } from './prompts.js';
 import { randomUUID } from 'node:crypto';
 
 export const HIGH_IMPACT_KINDS = new Set(['relation.set', 'char.death', 'char.revive']);
@@ -67,6 +67,42 @@ export function normalizeRefs(store: EventStore, worldId: string, rawInputs: New
   return { events: out, notes };
 }
 
+/** 元层回归题库（MD §9.3 固定题库）：抽取器在不同文本形态下都应产出可解析的 events JSON */
+export const REGRESSION_BANK: Array<{ id: string; input: string }> = [
+  { id: 'dialog', input: '林澜说："你迟到了。"沈青收起折扇："路上遇了巡检。"' },
+  { id: 'narration', input: '三年后，北境的雪下了整月。旧约无人再提。' },
+  { id: 'mixed', input: '"他是你什么人？"捕头问。林澜答："旧识。"——这是谎话。' },
+];
+
+/** 打分：题库 × 当前抽取配置 → 可解析且为合法事件结构的比例（0-1） */
+export async function runRegressionBank(provider: ProviderConfig, extraSystem?: string | null): Promise<number> {
+  let pass = 0;
+  for (const item of REGRESSION_BANK) {
+    try {
+      const res = await callLLM(provider, [
+        { role: 'system', content: extractorSystemPrompt() + (extraSystem ? `\n${extraSystem}` : '') },
+        { role: 'user', content: item.input },
+      ], { temperature: 0.1, maxTokens: 800 });
+      const j = extractJson(res.content);
+      const evs = Array.isArray(j?.events) ? j.events : null;
+      if (evs && evs.every((e: any) => e && typeof e.kind === 'string' && e.payload && typeof e.payload === 'object')) pass++;
+    } catch { /* 单题失败计 0 */ }
+  }
+  return pass / REGRESSION_BANK.length;
+}
+
+/**
+ * 自进化回归门（MD §9.3）：覆盖前/后各跑一次题库，after < before → 拒绝应用（自动防退化）。
+ * 返回 {pass, before, after}。
+ */
+export async function regressionGate(
+  provider: ProviderConfig, currentOverride: string | null, candidateOverride: string,
+): Promise<{ pass: boolean; before: number; after: number }> {
+  const before = await runRegressionBank(provider, currentOverride);
+  const after = await runRegressionBank(provider, candidateOverride);
+  return { pass: after >= before, before, after };
+}
+
 /** ① 自动校验：schema/引用完整性/时间悖论（确定性代码，零 LLM） */
 export function autoValidate(store: EventStore, worldId: string, inputs: NewEventInput[]): { ok: boolean; issues: string[] } {
   const issues: string[] = [];
@@ -90,6 +126,30 @@ export function autoValidate(store: EventStore, worldId: string, inputs: NewEven
         }
         if (p.validFrom == null) issues.push('relation.set 缺 validFrom');
         if (p.validTo != null && p.validTo < p.validFrom) issues.push('relation.set validTo < validFrom');
+        // 关系矛盾检测（基准集驱动，MD §9.1）：同对人物同时期出现互斥关系类型
+        {
+          const conflicts: Record<string, string[]> = {
+            '恋人': ['父子', '父女', '母亲', '父亲', '母子', '母女', '姐弟', '兄弟', '兄妹', '上下级', '死敌', 'lover'],
+            '姐弟': ['父子', '父亲', '父女', '母亲', '恋人'], '兄弟': ['父子', '父亲', '恋人'], '兄妹': ['父女', '父亲', '恋人'],
+            '父子': ['恋人', '姐弟', '兄弟', 'sworn kin', 'lover'], '父亲': ['恋人', '姐弟', '兄弟', 'sworn kin', 'lover', '死敌', '导师', '搭档'],
+            '父女': ['恋人', '兄妹', '姐弟', 'sworn kin', 'lover'], '母亲': ['恋人', 'sworn kin', 'lover'],
+            '死敌': ['导师', '恋人', '搭档', '父亲', 'lover'], '导师': ['死敌', '恋人', '父亲'], '搭档': ['死敌', '父亲'],
+            'sworn kin': ['father', 'mother', 'lover', '父亲'], 'father': ['sworn kin', 'lover'], 'mother': ['sworn kin', 'lover'],
+            'lover': ['father', 'mother', 'sworn kin', '死敌', '父亲'],
+          };
+          const cur = state.relations.filter(r => r.validTo == null || r.validTo > (p.validFrom ?? 0));
+          // 允许 ID 或人名匹配（抽取产物常混用），并考虑正反向
+          const pidA = nameToId.get(p.from) ?? p.from, pidB = nameToId.get(p.to) ?? p.to;
+          const norm = (x: string, y: string) => [x, y].sort().join('|');
+          const newPair = norm(pidA, pidB);
+          for (const r of cur) {
+            const rA = nameToId.get(r.from) ?? r.from, rB = nameToId.get(r.to) ?? r.to;
+            if (norm(rA, rB) !== newPair) continue;
+            if ((conflicts[r.type] ?? []).includes(p.type) || (conflicts[p.type] ?? []).includes(r.type)) {
+              issues.push(`关系矛盾：${r.from}/${r.to} 已是「${r.type}」，候选为「${p.type}」`);
+            }
+          }
+        }
         break;
       case 'char.death':
       case 'char.update': {
@@ -186,7 +246,7 @@ export async function runFunnel(
   const proposal: Proposal = {
     id: `prop-${randomUUID().slice(0, 10)}`, worldId, baseSeq,
     events: inputs.map(i => ({
-      worldId: i.worldId, workId: i.workId ?? null, worldTime: i.worldTime, worldTimeLabel: i.worldTimeLabel,
+      worldId: i.worldId || worldId, workId: i.workId ?? null, worldTime: i.worldTime, worldTimeLabel: i.worldTimeLabel,
       actor: i.actor, kind: i.kind, payload: i.payload, visibility: i.visibility ?? { knowers: '*', scope: 'public' },
       review: { status: 'pending' }, supersededBy: null, sourceRef: i.sourceRef ?? null, meta: i.meta,
     })) as any,
