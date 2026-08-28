@@ -2,5 +2,5 @@ node_modules/
 dist/
 data/
 *.log
+q*.txt
 .DS_Store
-q6.txt 

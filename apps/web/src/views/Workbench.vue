@@ -161,9 +161,8 @@ async function setBaseline() {
   } catch (e: any) { alert(e.message); }
 }
 async function resumeJob(j: any) {
-  const text = prompt('续跑需重传原文（切章结果必须一致）——粘贴全文');
-  if (!text) return;
-  const r = await api(`/api/jobs/${j.id}/resume`, { method: 'POST', body: JSON.stringify({ text }) });
+  // 服务端已持久化导入原文：免手工重传
+  const r = await api(`/api/jobs/${j.id}/resume`, { method: 'POST', body: JSON.stringify({}) });
   alert(`已从第 ${(r as any).cursor + 1} 章续跑：${(r as any).jobId}`);
   await loadUsage();
 }

@@ -1,6 +1,6 @@
 // EventVerse server：零框架 HTTP + SSE + 静态托管（MD 8：本地优先，默认 127.0.0.1）
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
-import { readFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -290,7 +290,19 @@ route('POST', '/api/jobs/:id/resume', ctx => {
   const running = jobs.list().find(j => j.kind === 'import' && j.worldId === old.worldId && (j.status === 'queued' || j.status === 'running'));
   if (running) return json(ctx.res, { error: `已有进行中的导入任务 ${running.id}` }, 409);
   const b = ctx.body ?? {};
-  if (!b.text) return json(ctx.res, { error: 'resume 需重传全文 text（切章结果必须一致）' }, 400);
+  // 优先用请求携带的原文；否则读导入时持久化的副本（免手工重传）
+  let text = String(b.text ?? '');
+  if (!text) {
+    const savedPath = join(DATA_DIR, 'imports', `${ctx.params.id}.json`);
+    if (existsSync(savedPath)) {
+      const saved = JSON.parse(readFileSync(savedPath, 'utf8'));
+      text = String(saved.text ?? '');
+      b.title = b.title || saved.title;
+      b.baseYear = b.baseYear ?? saved.baseYear;
+      b.llmChapterBudget = b.llmChapterBudget ?? saved.llmChapterBudget;
+    }
+  }
+  if (!text) return json(ctx.res, { error: 'resume 需原文（请求携带 text 或导入时已持久化）' }, 400);
   const job = jobs.create('import', { worldId: old.worldId, label: `续跑：${old.label}` });
   json(ctx.res, { jobId: job.id, cursor, workId }, 202);
   importNovel(store, ws, jobs, {
@@ -581,6 +593,14 @@ route('POST', '/api/import', async ctx => {
   const running = jobs.list().find(j => j.kind === 'import' && j.worldId === worldId && (j.status === 'queued' || j.status === 'running'));
   if (running) return json(ctx.res, { error: `该世界已有进行中的导入任务 ${running.id}`, jobId: running.id }, 409);
   const job = jobs.create('import', { worldId, label: `拆书：${ctx.body.title ?? ''}` });
+  // 持久化导入原文：断点续跑免手工重传（MD §2.4）
+  try {
+    mkdirSync(join(DATA_DIR, 'imports'), { recursive: true });
+    writeFileSync(join(DATA_DIR, 'imports', `${job.id}.json`), JSON.stringify({
+      worldId, title: ctx.body.title ?? '', text: String(ctx.body.text ?? ''),
+      baseYear: ctx.body.baseYear, llmChapterBudget: ctx.body.llmChapterBudget,
+    }), 'utf8');
+  } catch { /* 持久化失败不阻断导入 */ }
   json(ctx.res, { jobId: job.id }, 202);
   importNovel(store, ws, jobs, {
     worldId, workTitle: ctx.body.title || '导入作品', text: String(ctx.body.text ?? ''),

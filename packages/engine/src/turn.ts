@@ -151,7 +151,6 @@ export async function runRpTurn(deps: EngineDeps, session: ChatSession, userMess
       user: `【上一版被判平淡：${prose.issues.join('；')}】beat 不变，重写正文——句长拉开差距、删掉所有陈词：\n${content}`,
     });
     emit({ type: 'rewrite_candidates', data: candidates.map(c => ({ label: c.label, verdict: c.metrics.verdict, aiCliche: c.metrics.aiClicheDensity })) });
-    logUsage(deps, worldId, 'renderer-retry', rendererP, { inputTokens: 0, outputTokens: 0 });
     if (picked && picked.metrics.verdict !== 'flat') {
       emit({ type: 'content', data: picked.text });
       return finishTurn(deps, session, userMessage, picked.text, beat, picked.metrics, emit, options);
@@ -285,11 +284,11 @@ function logUsage(deps: EngineDeps, worldId: string, role: string, p: ProviderCo
 export interface RewriteCandidate { label: string; text: string; metrics: ReturnType<typeof analyzeProse> }
 
 export async function horizontalRewrite(
-  deps: EngineDeps, base: { system: string; user: string }, count = 3,
+  deps: EngineDeps, base: { system: string; user: string }, count = Number(process.env.EVENTVERSE_REWRITE_CANDIDATES ?? 3),
 ): Promise<{ picked: RewriteCandidate | null; candidates: RewriteCandidate[] }> {
   const providers = [deps.rendererProvider(), deps.rendererProvider(), deps.adversarialProvider()];
   const temps = [1.05, 1.25, 1.15];
-  const jobs = providers.slice(0, count).map(async (p, i) => {
+  const jobs = providers.slice(0, Math.max(1, count)).map(async (p, i) => {
     const res = await callLLM(p, [
       { role: 'system', content: base.system },
       { role: 'user', content: base.user },
@@ -453,6 +452,10 @@ export async function finalizeChapter(deps: EngineDeps, worldId: string, workId:
 
 export async function runToolChat(deps: EngineDeps, ctx: ToolContext, messages: Array<{ role: string; content: string }>, emit: Emit): Promise<{ content: string; toolCalls: string[] }> {
   const chatP = deps.rendererProvider();
+  // 基准驱动：可见状态每回合预算一次，工具循环内复用（stateVisibleTo 全量重放 600ms+/次）
+  if (ctx.viewerCharId && !ctx.viewerState) {
+    ctx.viewerState = ctx.store.stateVisibleTo(ctx.worldId, ctx.viewerCharId);
+  }
   const msgs: any[] = [...messages];
   const used: string[] = [];
   for (let round = 0; round < MAX_AGENT_TOOL_CALLS; round++) {

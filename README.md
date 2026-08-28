@@ -3,7 +3,7 @@
 > AI 长篇叙事平台 —— "玩故事"与"写故事"共用同一**事件溯源事实底座**的双门面产品。
 > 设计蓝图见《AI 叙事平台设计方案》（事件流 + 可见性谓词 + 对抗审漏斗 + 双 agent 回合引擎）。
 
-## 快速开始（Node ≥ 22.5，零配置离线可用）
+## 快速开始（Node ≥ 24，零配置离线可用）
 
 ```bash
 npm install
@@ -79,6 +79,13 @@ Docker：`docker compose up -d --build`（amd64/arm64）。
 - 本地优先：默认只监听 127.0.0.1，数据（正文/事件/密钥）全部在本地数据目录；
 - API Key 使用 AES-256-GCM 加密，密钥文件 `master.key` 不离开数据目录；
 - `settings.json` 只存密文（vault），接口不回传明文。
+
+## 文档
+
+- [HTTP API 全量参考](docs/API.md)
+- [性能基准与缓存设计](docs/BENCHMARKS.md)（`node scripts/bench-replay.mjs` 复现）
+- [贡献指南（含反模式清单）](CONTRIBUTING.md) · [CLA](docs/CLA.md)
+- CI：GitHub Actions push/PR 自动构建 + 全量测试（Node 24）
 
 ## 许可证
 

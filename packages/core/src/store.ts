@@ -1,10 +1,10 @@
-// ÊÂ¼þ¿â£ºnode:sqlite ´æ´¢ + append-only + »Ø¹ö + ·ÖÖ§£¨MD 1.4 / 2.4£©
+// ï¿½Â¼ï¿½ï¿½â£ºnode:sqlite ï¿½æ´¢ + append-only + ï¿½Ø¹ï¿½ + ï¿½ï¿½Ö§ï¿½ï¿½MD 1.4 / 2.4ï¿½ï¿½
 import { DatabaseSync } from 'node:sqlite';
 import {
   WorldEvent, WorldState, Guidance, Proposal, WorkMeta, ChapterMeta,
   SCHEMA_VER, Actor, ReviewStatus, Visibility,
 } from './types.js';
-import { replay, replayVisible, diffStates, StateDiff, isEmptyDiff } from './reducer.js';
+import { replay, replayVisible, diffStates, StateDiff, isEmptyDiff, applyEvent } from './reducer.js';
 import { randomUUID } from 'node:crypto';
 
 export interface NewEventInput {
@@ -27,6 +27,9 @@ const META_KINDS = new Set(['intent.set', 'meta.rollback', 'meta.note']);
 
 export class EventStore {
   db: DatabaseSync;
+  /** ï¿½ï¿½ï¿½ï¿½ï¿½æ£ºÃ¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¶Ó°×´Ì¬ï¿½ï¿½append ï¿½ï¿½ï¿½ï¿½ï¿½Æ½ï¿½ï¿½ï¿½rollback/Ç¨ï¿½ï¿½Ê§Ð§ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½MD ï¿½ï¿½6/ï¿½ï¿½14.3 */
+  private eventsCache = new Map<string, WorldEvent[]>();
+  private stateCache = new Map<string, WorldState>();
 
   constructor(path: string) {
     this.db = new DatabaseSync(path);
@@ -61,8 +64,8 @@ export class EventStore {
       prev_id TEXT, created_at TEXT NOT NULL
     );
     `);
-    try { this.db.exec('ALTER TABLE worlds ADD COLUMN max_tier TEXT NOT NULL DEFAULT \'open\''); } catch { /* ÒÑ´æÔÚ */ }
-    try { this.db.exec('ALTER TABLE proposals ADD COLUMN base_seq INTEGER'); } catch { /* ÒÑ´æÔÚ */ }
+    try { this.db.exec('ALTER TABLE worlds ADD COLUMN max_tier TEXT NOT NULL DEFAULT \'open\''); } catch { /* ï¿½Ñ´ï¿½ï¿½ï¿½ */ }
+    try { this.db.exec('ALTER TABLE proposals ADD COLUMN base_seq INTEGER'); } catch { /* ï¿½Ñ´ï¿½ï¿½ï¿½ */ }
     this.db.exec(`CREATE TABLE IF NOT EXISTS cost_baseline (
       world_id TEXT NOT NULL, role TEXT NOT NULL, avg_in INTEGER NOT NULL, avg_out INTEGER NOT NULL,
       calls INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (world_id, role)
@@ -102,7 +105,7 @@ export class EventStore {
     return (rows as any[]).map(r => ({ id: r.id, worldId: r.world_id, title: r.title, author: r.author ?? undefined, description: r.description ?? undefined, createdAt: r.created_at }));
   }
 
-  // ---------- chapters£¨ÔªÊý¾ÝÈë¿â£»ÕýÎÄÊÇ Markdown ÎÄ¼þ£¬ÓÉ server ¹ÜÀí£¬MD 1.4£© ----------
+  // ---------- chaptersï¿½ï¿½Ôªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½â£»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Markdown ï¿½Ä¼ï¿½ï¿½ï¿½ï¿½ï¿½ server ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½MD 1.4ï¿½ï¿½ ----------
 
   saveChapter(c: ChapterMeta): ChapterMeta {
     const now = new Date().toISOString();
@@ -148,6 +151,11 @@ export class EventStore {
       .run(e.id, e.schemaVer, e.sequence, e.worldId, e.workId, e.worldTime, e.worldTimeLabel ?? null,
         e.chapterRef ?? null, e.turnRef ?? null, e.actor, e.kind, JSON.stringify(e.payload), JSON.stringify(e.visibility),
         JSON.stringify(e.review), null, e.sourceRef ?? null, e.meta ? 1 : 0, e.createdAt);
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ½ï¿½ï¿½ï¿½ï¿½Â¼ï¿½ï¿½ï¿½ï¿½ï¿½×·ï¿½ï¿½ + Í¶Ó°×´Ì¬Ç°ï¿½ï¿½ï¿½ï¿½miss ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â´ï¿½È«ï¿½ï¿½ï¿½ï¿½ï¿½Ø£ï¿½
+    const evts = this.eventsCache.get(input.worldId);
+    if (evts) evts.push(e);
+    const st = this.stateCache.get(input.worldId);
+    if (st) this.stateCache.set(input.worldId, applyEvent(st, e));
     return e;
   }
 
@@ -157,6 +165,14 @@ export class EventStore {
   }
 
   listEvents(worldId: string, opts: { fromSeq?: number; toSeq?: number; kind?: string } = {}): WorldEvent[] {
+    if (!opts.fromSeq && !opts.toSeq && !opts.kind) {
+      let cached = this.eventsCache.get(worldId);
+      if (!cached) {
+        cached = (this.db.prepare('SELECT * FROM events WHERE world_id=? ORDER BY sequence').all(worldId) as any[]).map(rowToEvent);
+        this.eventsCache.set(worldId, cached);
+      }
+      return cached;
+    }
     const conds = ['world_id=?']; const args: any[] = [worldId];
     if (opts.fromSeq != null) { conds.push('sequence>=?'); args.push(opts.fromSeq); }
     if (opts.toSeq != null) { conds.push('sequence<=?'); args.push(opts.toSeq); }
@@ -170,7 +186,7 @@ export class EventStore {
     return r ? rowToEvent(r) : undefined;
   }
 
-  /** »Ø¹ö£º±ê¼Ç±»ÍÆ·­ + ×·¼ÓÉó¼ÆÊÂ¼þ£¨ÓÀ²»ÎïÀíÉ¾³ý£¬MD 1.2£© */
+  /** ï¿½Ø¹ï¿½ï¿½ï¿½ï¿½ï¿½Ç±ï¿½ï¿½Æ·ï¿½ + ×·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É¾ï¿½ï¿½ï¿½ï¿½MD 1.2ï¿½ï¿½ */
   rollback(targetId: string, reason?: string): WorldEvent | undefined {
     const t = this.getEvent(targetId);
     if (!t || t.supersededBy) return undefined;
@@ -182,10 +198,16 @@ export class EventStore {
       sourceRef: 'rollback',
     });
     this.db.prepare('UPDATE events SET superseded_by=? WHERE id=?').run(audit.id, targetId);
+    this.invalidateWorldCache(t.worldId);
     return audit;
   }
 
-  /** ÊÀ½çÏß·ÖÖ§£º¸´ÖÆ fromSeq ¼°Ö®Ç°µÄÊÂ¼þµ½ÐÂ world£¨ÀæÔ°´æµµ/»ØµµµÄÍ¨ÓÃµ××ù£© */
+  private invalidateWorldCache(worldId: string) {
+    this.eventsCache.delete(worldId);
+    this.stateCache.delete(worldId);
+  }
+
+  /** ï¿½ï¿½ï¿½ï¿½ï¿½ß·ï¿½Ö§ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ fromSeq ï¿½ï¿½Ö®Ç°ï¿½ï¿½ï¿½Â¼ï¿½ï¿½ï¿½ï¿½ï¿½ worldï¿½ï¿½ï¿½ï¿½Ô°ï¿½æµµ/ï¿½Øµï¿½ï¿½ï¿½Í¨ï¿½Ãµï¿½ï¿½ï¿½ï¿½ï¿½ */
   branchWorld(fromWorldId: string, newWorldId: string, newTitle: string, fromSeq?: number): { copied: number } {
     const upto = fromSeq ?? Number.MAX_SAFE_INTEGER;
     const events = this.listEvents(fromWorldId, { toSeq: upto });
@@ -202,9 +224,17 @@ export class EventStore {
     return { copied: seq };
   }
 
-  // ---------- ËÄÊÓÍ¼£¨MD 1.2£© ----------
+  // ---------- ï¿½ï¿½ï¿½ï¿½Í¼ï¿½ï¿½MD 1.2ï¿½ï¿½ ----------
 
   stateAt(worldId: string, upto?: { worldTime?: number; sequence?: number }): WorldState {
+    // ï¿½ï¿½ uptoï¿½ï¿½ï¿½ï¿½Í¶Ó°ï¿½ï¿½ï¿½æ£¨append ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½O(1) ï¿½ï¿½ï¿½Ø£ï¿½ï¿½ï¿½ upto ï¿½ï¿½ï¿½ï¿½Ê·ï¿½ï¿½Ñ¯ï¿½ï¿½ï¿½ï¿½È«ï¿½ï¿½ï¿½Ø·ï¿½
+    if (!upto) {
+      const cached = this.stateCache.get(worldId);
+      if (cached) return { ...cached };
+      const s = replay(this.listEvents(worldId), worldId);
+      this.stateCache.set(worldId, s);
+      return { ...s };
+    }
     return replay(this.listEvents(worldId), worldId, upto);
   }
   stateVisibleTo(worldId: string, viewerCharId: string, upto?: { worldTime?: number }, present?: Set<string>): WorldState {
@@ -224,7 +254,7 @@ export class EventStore {
     this.db.prepare('UPDATE worlds SET max_tier=? WHERE id=?').run(tier, id);
   }
 
-  /** ÄÚÈÝ·Ö¼¶Èý·½È¡Ð¡£¨MD 5.1£©£ºmin(user, card/pack, global)£¬ÖÐÍ¾Ö»ÊÕ½ô */
+  /** ï¿½ï¿½ï¿½Ý·Ö¼ï¿½ï¿½ï¿½ï¿½ï¿½È¡Ð¡ï¿½ï¿½MD 5.1ï¿½ï¿½ï¿½ï¿½min(user, card/pack, global)ï¿½ï¿½ï¿½ï¿½Í¾Ö»ï¿½Õ½ï¿½ */
   resolveTier(user: string | undefined, card: string | undefined, worldId: string): 'safe' | 'standard' | 'open' {
     const order = ['safe', 'standard', 'open'];
     const g = (() => {
@@ -234,7 +264,7 @@ export class EventStore {
     return order[Math.min(pick(user), pick(card), pick(g))] as 'safe' | 'standard' | 'open';
   }
 
-  // ---------- Ôª²ã prompt ¸²¸Ç£¨MD 3.5 ×Ô½ø»¯£º½öÔª²ã£¬Á´Ê½¿É»Ø¹ö£© ----------
+  // ---------- Ôªï¿½ï¿½ prompt ï¿½ï¿½ï¿½Ç£ï¿½MD 3.5 ï¿½Ô½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ôªï¿½ã£¬ï¿½ï¿½Ê½ï¿½É»Ø¹ï¿½ï¿½ï¿½ ----------
 
   savePromptOverride(worldId: string, role: string, text: string): { id: string; prevId: string | null } {
     const prev = this.db.prepare('SELECT id FROM prompt_overrides WHERE world_id=? AND role=? ORDER BY created_at DESC LIMIT 1').get(worldId, role) as any;
@@ -253,7 +283,7 @@ export class EventStore {
       : this.db.prepare('SELECT * FROM prompt_overrides WHERE world_id=? ORDER BY created_at DESC').all(worldId);
     return rows as any[];
   }
-  /** »Ø¹ö = »Ö¸´ prev_id µÄÎÄ±¾ÎªÐÂÍ·²¿£¨²»É¾³ýÀúÊ·£¬MD 1.2 Ô­Ôò£© */
+  /** ï¿½Ø¹ï¿½ = ï¿½Ö¸ï¿½ prev_id ï¿½ï¿½ï¿½Ä±ï¿½Îªï¿½ï¿½Í·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É¾ï¿½ï¿½ï¿½ï¿½Ê·ï¿½ï¿½MD 1.2 Ô­ï¿½ï¿½ */
   rollbackPromptOverride(id: string): boolean {
     const cur = this.db.prepare('SELECT * FROM prompt_overrides WHERE id=?').get(id) as any;
     if (!cur?.prev_id) return false;
@@ -262,7 +292,7 @@ export class EventStore {
     return true;
   }
 
-  // ---------- guidance£¨MD 3.5 Guidance Ãªµã£© ----------
+  // ---------- guidanceï¿½ï¿½MD 3.5 Guidance Ãªï¿½ã£© ----------
 
   addGuidance(g: Omit<Guidance, 'id' | 'createdAt'> & { id?: string; worldId?: string }): Guidance {
     const row: Guidance = { id: g.id ?? randomUUID(), title: g.title, description: g.description, source: g.source, active: g.active, createdAt: new Date().toISOString() };
@@ -280,7 +310,7 @@ export class EventStore {
     this.db.prepare('UPDATE guidance SET active=? WHERE id=?').run(active ? 1 : 0, id);
   }
 
-  // ---------- proposals£¨¶Ô¿¹ÉóÂ©¶·£¬MD 2.2£© ----------
+  // ---------- proposalsï¿½ï¿½ï¿½Ô¿ï¿½ï¿½ï¿½Â©ï¿½ï¿½ï¿½ï¿½MD 2.2ï¿½ï¿½ ----------
 
   saveProposal(p: Proposal) {
     this.db.prepare('INSERT OR REPLACE INTO proposals (id, world_id, base_seq, events, auto_check, adversarial, status, created_at, source_label) VALUES (?,?,?,?,?,?,?,?,?)')
@@ -318,9 +348,9 @@ export class EventStore {
     return out;
   }
 
-  // ---------- schema Ç¨ÒÆ£¨MD ¡ì14.3£ºv1¡úv2 ÑÝÁ·£»Ö»¼Ó²»¸ÄÔ­ÔòµÄÊ¾ÀýÓ³Éä£© ----------
+  // ---------- schema Ç¨ï¿½Æ£ï¿½MD ï¿½ï¿½14.3ï¿½ï¿½v1ï¿½ï¿½v2 ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö»ï¿½Ó²ï¿½ï¿½ï¿½Ô­ï¿½ï¿½ï¿½Ê¾ï¿½ï¿½Ó³ï¿½ä£© ----------
 
-  /** °Ñ v1 ¾ÉÊÂ¼þÇ¨ÒÆµ½ v2£¨kind ±ðÃû¹éÒ»£©¡£ÃÝµÈ£ºÒÑ v2 µÄÐÐ²»¶¯¡£ */
+  /** ï¿½ï¿½ v1 ï¿½ï¿½ï¿½Â¼ï¿½Ç¨ï¿½Æµï¿½ v2ï¿½ï¿½kind ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ÝµÈ£ï¿½ï¿½ï¿½ v2 ï¿½ï¿½ï¿½Ð²ï¿½ï¿½ï¿½ï¿½ï¿½ */
   migrateLegacyEvents(worldId?: string): { migrated: number } {
     const rows = worldId
       ? this.db.prepare('SELECT id, kind, schema_ver FROM events WHERE schema_ver < ? AND world_id=?').all(SCHEMA_VER, worldId) as any[]
@@ -335,10 +365,12 @@ export class EventStore {
       upd.run(ALIAS[r.kind] ?? r.kind, SCHEMA_VER, r.id);
       n++;
     }
+    if (n) this.eventsCache.clear();
+    if (n) this.stateCache.clear();
     return { migrated: n };
   }
 
-  // ---------- usage / cost£¨MD 6 ³É±¾Í¸Ã÷£© ----------
+  // ---------- usage / costï¿½ï¿½MD 6 ï¿½É±ï¿½Í¸ï¿½ï¿½ï¿½ï¿½ ----------
 
   logUsage(u: { worldId?: string; role: string; model: string; inputTokens: number; outputTokens: number; costUsd?: number; label?: string }) {
     this.db.prepare('INSERT INTO usage_log (ts, world_id, role, model, input_tokens, output_tokens, cost_usd, label) VALUES (?,?,?,?,?,?,?,?)')
@@ -365,17 +397,17 @@ function rowToEvent(r: any): WorldEvent {
 function summarize(e: WorldEvent): string {
   const p: any = e.payload;
   switch (e.kind) {
-    case 'char.create': return `${p.name} µÇ³¡`;
-    case 'char.death': return `${p.id} ËÀÍö`;
-    case 'char.revive': return `${p.id} ¸´»î`;
-    case 'relation.set': return `${p.from} ¡ª${p.type}¡ú ${p.to}`;
-    case 'relation.end': return `¹ØÏµ ${p.id} ½áÊø`;
+    case 'char.create': return `${p.name} ï¿½Ç³ï¿½`;
+    case 'char.death': return `${p.id} ï¿½ï¿½ï¿½ï¿½`;
+    case 'char.revive': return `${p.id} ï¿½ï¿½ï¿½ï¿½`;
+    case 'relation.set': return `${p.from} ï¿½ï¿½${p.type}ï¿½ï¿½ ${p.to}`;
+    case 'relation.end': return `ï¿½ï¿½Ïµ ${p.id} ï¿½ï¿½ï¿½ï¿½`;
     case 'fact.set': return `${p.key} = ${p.value}`;
-    case 'location.move': return `${p.charId} ¡ú ${p.place}`;
-    case 'item.create': return `ÎïÆ· ${p.name}`;
-    case 'item.transfer': return `${p.id} ¡ú ${p.holder}`;
-    case 'foreshadow.plant': return `·ü±Ê£º${String(p.description).slice(0, 20)}`;
-    case 'foreshadow.recover': return `»ØÊÕ·ü±Ê ${p.id}`;
+    case 'location.move': return `${p.charId} ï¿½ï¿½ ${p.place}`;
+    case 'item.create': return `ï¿½ï¿½Æ· ${p.name}`;
+    case 'item.transfer': return `${p.id} ï¿½ï¿½ ${p.holder}`;
+    case 'foreshadow.plant': return `ï¿½ï¿½ï¿½Ê£ï¿½${String(p.description).slice(0, 20)}`;
+    case 'foreshadow.recover': return `ï¿½ï¿½ï¿½Õ·ï¿½ï¿½ï¿½ ${p.id}`;
     default: return e.kind;
   }
 }

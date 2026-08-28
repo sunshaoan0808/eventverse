@@ -12,6 +12,8 @@ export interface ToolContext {
   workId: string | null;
   /** 可见性视角（RP 模式下为玩家角色） */
   viewerCharId: string | null;
+  /** ★每回合预算一次的可见状态（基准驱动：stateVisibleTo 全量重放 600ms+/次，工具内复用） */
+  viewerState?: WorldState;
   adversarialProvider: ProviderConfig;
   sourceLabel: string;
 }
@@ -78,7 +80,7 @@ export async function executeTool(ctx: ToolContext, name: string, args: any): Pr
     }
     case 'search_entities': {
       const q = String(args.query ?? '');
-      const state = ctx.viewerCharId ? store.stateVisibleTo(worldId, ctx.viewerCharId) : store.stateAt(worldId);
+      const state = ctx.viewerState ?? (ctx.viewerCharId ? store.stateVisibleTo(worldId, ctx.viewerCharId) : store.stateAt(worldId));
       const hits: string[] = [];
       for (const c of Object.values(state.characters)) {
         if (c.name.includes(q) || c.id.includes(q) || c.aliases.some(a => a.includes(q)))
@@ -102,7 +104,7 @@ export async function executeTool(ctx: ToolContext, name: string, args: any): Pr
     }
     case 'recall': {
       if (!ctx.viewerCharId) return 'recall 需要 RP 会话（无玩家角色视角）';
-      const state = store.stateVisibleTo(worldId, ctx.viewerCharId);
+      const state = ctx.viewerState ?? store.stateVisibleTo(worldId, ctx.viewerCharId);
       const about = String(args.about ?? 'self');
       const nameOf = (id: string) => state.characters[id]?.name ?? id;
       if (about.includes('self')) {
