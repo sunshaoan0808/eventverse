@@ -46,10 +46,12 @@ export async function importNovel(store: EventStore, ws: Workspace, jobs: JobReg
     jobs.tick(job.id, { result: { workId } });
     const proposals: string[] = [];
     let eventsDirect = 0;
+    let applied = 0;
     const bodies = split.map(s => s.body);
     const times = assignWorldTimes(bodies, { baseYear: opts.baseYear ?? 1000 });
-
-    for (let i = resumeFrom; i < split.length; i++) {
+    // 跨章人物名去重：同一名字只在首次出现时提案（消灭提案洪水，MD §5.3）
+    const globalSeen = new Set<string>();
+    for (let i = 0; i < split.length; i++) {
       if (signal?.aborted) { jobs.tick(job.id, { cursor: i }); throw new Error('cancelled'); }
       const ch = split[i];
       const chapterId = newId('ch');
@@ -63,20 +65,21 @@ export async function importNovel(store: EventStore, ws: Workspace, jobs: JobReg
       });
       eventsDirect++;
 
-      // 抽取：预算内用 LLM，超出/失败降级启发式
+      // 抽取：预算内用 LLM，超出/失败降级启发式（启发式带全局人物名去重）
       const budget = opts.llmChapterBudget ?? 20;
       let events = i < budget
-        ? await llmExtract(opts.extractorProvider, ch.body, times[i], signal)
+        ? await llmExtract(opts.extractorProvider, ch.body, times[i], signal, globalSeen)
         : [];
-      if (!events.length) events = heuristicExtract(ch.body, times[i]);
+      if (!events.length) events = heuristicExtract(ch.body, times[i], globalSeen);
 
       if (events.length) {
         const p = await runFunnel(store, opts.worldId, events, opts.adversarialProvider, `拆书《${opts.workTitle}》第${i + 1}章`);
         proposals.push(p.id);
+        if (p.status === 'approved') { store.applyProposal(p.id); applied++; }
       }
       jobs.tick(job.id, { progress: i + 1, cursor: i + 1, label: `拆书 ${i + 1}/${split.length}：${ch.title}` });
     }
-    jobs.done(job.id, { workId, chapters: split.length, proposals: proposals.length, resumedFrom: resumeFrom || undefined });
+    jobs.done(job.id, { workId, chapters: split.length, proposals: proposals.length, applied, resumedFrom: resumeFrom || undefined });
     return { workId, chapters: split.length, proposals, eventsDirect, resumedFrom: resumeFrom || undefined };
   } catch (e: any) {
     jobs.fail(job.id, String(e?.message ?? e));
@@ -84,7 +87,7 @@ export async function importNovel(store: EventStore, ws: Workspace, jobs: JobReg
   }
 }
 
-async function llmExtract(provider: ProviderConfig, body: string, worldTime: number, signal?: AbortSignal): Promise<NewEventInput[]> {
+async function llmExtract(provider: ProviderConfig, body: string, worldTime: number, signal?: AbortSignal, globalSeen?: Set<string>): Promise<NewEventInput[]> {
   try {
     const res = await callLLM(provider, [
       { role: 'system', content: extractorSystemPrompt() },
@@ -94,6 +97,12 @@ async function llmExtract(provider: ProviderConfig, body: string, worldTime: num
     const events: NewEventInput[] = [];
     for (const ev of j?.events ?? []) {
       if (!ev?.kind || !ev?.payload) continue;
+      // 跨章去重：人物已提案过则跳过 char.create（减少重复提案）
+      if (ev.kind === 'char.create' && globalSeen) {
+        const nm = ev.payload?.name ?? ev.payload?.id;
+        if (nm && globalSeen.has(nm)) continue;
+        if (nm) globalSeen.add(nm);
+      }
       events.push({
         worldId: '', actor: 'agent', worldTime,
         kind: ev.kind, payload: normalizePayload(ev.kind, ev.payload),
@@ -116,15 +125,18 @@ function normalizePayload(kind: string, p: any): any {
 }
 
 /** 启发式抽取降级：引号对白中的称呼、引号前的"XX道/说"模式 —— 提供最低限度的候选 */
-export function heuristicExtract(body: string, worldTime: number): NewEventInput[] {
+export function heuristicExtract(body: string, worldTime: number, globalSeen?: Set<string>): NewEventInput[] {
   const out: NewEventInput[] = [];
-  const seen = new Set<string>();
-  const pat = /([\u4e00-\u9fa5]{2,4})(?:说|道|问|喊|冷笑|低声)/g;
+  const seen = new Set<string>(globalSeen ?? []);
+  // 对白主 + 含数字/字母的人名（"人物7""K先生"）一并覆盖
+  const pat = /([\u4e00-\u9fa5A-Za-z0-9]{2,6}?)(?:说|道|问|喊|冷笑|低声)/g;
   let m: RegExpExecArray | null;
   while ((m = pat.exec(body)) !== null) {
-    const name = m[1];
-    if (seen.has(name) || ['他们', '她们', '我们', '自己', '众人'].includes(name)) continue;
+    const name = m[1].replace(/^[的于是就在]/, '');
+    if (!name || name.length < 2 || seen.has(name)) continue;
+    if (['他们', '她们', '我们', '自己', '众人', '一个', '这个', '那个'].includes(name)) continue;
     seen.add(name);
+    globalSeen?.add(name);
     out.push({ worldId: '', actor: 'agent', worldTime, kind: 'char.create', payload: { id: name, name, attrs: { 来源: '启发式抽取' } }, sourceRef: 'heuristic' });
   }
   return out.slice(0, 12);

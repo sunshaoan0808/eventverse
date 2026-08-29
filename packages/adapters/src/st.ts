@@ -66,14 +66,18 @@ export interface WorldBookEntry {
 }
 
 export function normalizeWorldBook(wb: STWorldBook | undefined): WorldBookEntry[] {
-  if (!wb) return [];
-  const raw = Array.isArray(wb.entries) ? wb.entries : Object.values(wb.entries ?? {});
+  if (!wb || typeof wb !== 'object') return [];
+  let raw: any[] = [];
+  if (Array.isArray(wb.entries)) raw = wb.entries;
+  else if (wb.entries && typeof wb.entries === 'object') raw = Object.values(wb.entries);
+  else if (Array.isArray(wb as any)) raw = wb as unknown as any[];            // 顶层数组
+  else raw = Object.values(wb as unknown as Record<string, any>);             // ★裸导出：顶层 uid→条目
   return raw.map((e: any) => ({
-    keys: (e.keys ?? e.key ?? []).map(String),
-    content: String(e.content ?? ''),
-    constant: !!e.constant,
-    enabled: e.enabled !== false && (e.disable !== true),
-    comment: e.comment ?? e.name,
+    keys: (e?.keys ?? e?.key ?? []).map(String),
+    content: String(e?.content ?? ''),
+    constant: !!e?.constant,
+    enabled: e?.enabled !== false && (e?.disable !== true),
+    comment: e?.comment ?? e?.name,
   })).filter(e => e.content);
 }
 

@@ -114,6 +114,13 @@ async function reject(p: any) {
   await api(`/api/proposals/${p.id}/reject`, { method: 'POST' });
   await loadReview();
 }
+async function batchReview(action: 'approve' | 'reject') {
+  const label = action === 'approve' ? '批准并落库' : '拒绝';
+  if (!confirm(`确定${label}全部待审提案？`)) return;
+  const r = await api(`/api/worlds/${props.worldId}/proposals/batch`, { method: 'POST', body: JSON.stringify({ action }) });
+  alert(`${action === 'approve' ? '已批准' : '已拒绝'} ${(r as any).proposals} 条提案${action === 'approve' ? `（落库 ${(r as any).eventsApplied} 条事件）` : ''}`);
+  await Promise.all([loadReview(), loadState()]);
+}
 
 // guidance
 async function loadGuidance() {
@@ -401,6 +408,11 @@ const unrecovered = computed(() => (state.value?.foreshadowings ?? []).filter((f
     <div v-else-if="tab === 'review'">
       <div class="card">
         <h3>🔍 对抗审漏斗（AI 只提案，批准才落库）</h3>
+        <div class="row" style="margin-bottom:10px" v-if="proposals.filter(p => p.status === 'pending').length > 1">
+          <span class="dimmer">批量处理 {{ proposals.filter(p => p.status === 'pending').length }} 条待审：</span>
+          <button class="primary small" @click="batchReview('approve')">✓ 全部批准</button>
+          <button class="danger small" @click="batchReview('reject')">✗ 全部拒绝</button>
+        </div>
         <div v-for="p in proposals" :key="p.id" class="card" style="margin-bottom:10px">
           <div class="row">
             <span class="mono dimmer">{{ p.id }}</span>

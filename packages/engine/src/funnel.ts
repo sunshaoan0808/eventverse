@@ -242,7 +242,11 @@ export async function runFunnel(
   // 状态：对抗审 normal 且自动校验过 → 视为 auto_ok（可直接自动应用或一键批）
   // 乐观锁基线：记录创建时的世界版本（批准时校验是否已被并发推进，MD 2.2 expectedVersionNo 思路）
   const baseSeq = (store.db.prepare('SELECT MAX(sequence) AS m FROM events WHERE world_id=?').get(worldId) as any)?.m ?? 0;
-  const status: Proposal['status'] = 'pending';
+  // 轻事实模式（MD §5.3）：校验过 + 无冲突 → 自动批准并落库，不进人工队列
+  let status: Proposal['status'] = 'pending';
+  if (autoCheck.ok && adversarial?.verdict === 'normal') {
+    status = 'approved';
+  }
   const proposal: Proposal = {
     id: `prop-${randomUUID().slice(0, 10)}`, worldId, baseSeq,
     events: inputs.map(i => ({
@@ -253,5 +257,7 @@ export async function runFunnel(
     autoCheck, adversarial, status, createdAt: new Date().toISOString(), sourceLabel,
   };
   store.saveProposal(proposal);
+  // 轻事实模式自动批准 ⇒ 自动落库（审计提案留痕，状态 approved）
+  if (proposal.status === 'approved') store.applyProposal(proposal.id);
   return proposal;
 }

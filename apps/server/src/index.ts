@@ -437,6 +437,17 @@ route('POST', '/api/proposals/:id/approve', ctx => {
   json(ctx.res, { ok: true, applied: applied.length });
 });
 route('POST', '/api/proposals/:id/reject', ctx => { store.setProposalStatus(ctx.params.id, 'rejected'); json(ctx.res, { ok: true }); });
+// 批量审核（提案洪水场景：一键处理全部待审）
+route('POST', '/api/worlds/:id/proposals/batch', ctx => {
+  const action = ctx.body.action === 'reject' ? 'rejected' : 'approved';
+  const pend = store.listProposals(ctx.params.id, 'pending');
+  let done = 0;
+  for (const p of pend) {
+    store.setProposalStatus(p.id, action);
+    if (action === 'approved') done += store.applyProposal(p.id).length;
+  }
+  json(ctx.res, { ok: true, action, proposals: pend.length, eventsApplied: done });
+});
 
 // guidance
 route('GET', '/api/worlds/:id/guidance', ctx => json(ctx.res, store.listGuidance(ctx.params.id)));

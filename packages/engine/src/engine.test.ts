@@ -38,15 +38,14 @@ describe('漏斗', () => {
     expect(['light', 'semi', 'full']).toContain(funnelModeFor(store, 'w1'));
   });
 
-  it('runFunnel 产出 pending proposal，批准前不入库', async () => {
+  it('runFunnel：轻事实模式自动批准落库（MD §5.3，不再人工排队）', async () => {
     const p = await runFunnel(store, 'w1', [
       { worldId: 'w1', actor: 'agent', worldTime: 1000, kind: 'char.create', payload: { id: 'B', name: '沈青' } },
     ], mockP('adversarial'), 'test');
-    expect(p.status).toBe('pending');
-    expect(store.stateAt('w1').characters.B).toBeUndefined();
-    store.setProposalStatus(p.id, 'approved');
-    store.applyProposal(p.id);
+    expect(p.status).toBe('approved'); // light 模式 + 校验过 + normal → 自动批准
     expect(store.stateAt('w1').characters.B).toBeDefined();
+    // 人工队列中仍可查到该提案（审计留痕）
+    expect(store.listProposals('w1', 'approved').some(x => x.id === p.id)).toBe(true);
   });
 });
 

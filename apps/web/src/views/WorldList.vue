@@ -15,9 +15,42 @@ const jobId = ref('');
 const jobState = ref<any>(null);
 const stJson = ref('');
 const stBusy = ref(false);
+const stFileName = ref('');
+let stPngB64 = '';
 const wbJson = ref('');
 const wbBusy = ref(false);
 const wbWorld = ref('');
+
+async function onStFile(e: Event) {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  stFileName.value = f.name;
+  if (f.name.toLowerCase().endsWith('.png')) {
+    const buf = new Uint8Array(await f.arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    stPngB64 = btoa(bin);
+    stJson.value = '';
+  } else {
+    stJson.value = await f.text();
+    stPngB64 = '';
+  }
+}
+
+async function importStCard() {
+  if (!selectedWorld.value) { alert('先选择世界'); return; }
+  if (!stJson.value.trim() && !stPngB64) { alert('选择角色卡文件（.png/.json）或粘贴 JSON'); return; }
+  stBusy.value = true;
+  try {
+    const body: any = { worldId: selectedWorld.value, worldTime: 1000 };
+    if (stPngB64) body.pngBase64 = stPngB64;
+    else body.card = JSON.parse(stJson.value);
+    const r = await api('/api/import/st-card', { method: 'POST', body: JSON.stringify(body) });
+    alert(`已导入角色：${(r as any).name}（+${(r as any).facts} 条世界书）`);
+    stJson.value = ''; stPngB64 = ''; stFileName.value = '';
+  } catch (e: any) { alert('导入失败：' + e.message); }
+  stBusy.value = false;
+}
 
 // 开书向导（Session Zero，MD §5.3）
 const wizStep = ref(1);
@@ -97,18 +130,6 @@ async function pollJob() {
       return;
     }
   }
-}
-
-async function importStCard() {
-  if (!stJson.value.trim() || !selectedWorld.value) return;
-  stBusy.value = true;
-  try {
-    const card = JSON.parse(stJson.value);
-    const r = await api('/api/import/st-card', { method: 'POST', body: JSON.stringify({ worldId: selectedWorld.value, card, worldTime: 1000 }) });
-    alert(`已导入角色：${(r as any).name}（+${(r as any).facts} 条世界书）`);
-    stJson.value = '';
-  } catch (e: any) { alert('导入失败：' + e.message); }
-  stBusy.value = false;
 }
 
 function exportWb() {
@@ -211,20 +232,29 @@ function exportWb() {
     </div>
 
     <div class="card">
-      <h3>🃏 导入 SillyTavern 角色卡（v2/v3 JSON，含世界书）</h3>
-      <textarea v-model="stJson" style="min-height:80px" placeholder='粘贴 ST 角色卡 JSON（PNG 卡可在设置页用工具转出 chara 字段）'></textarea>
-      <div class="row" style="margin-top:8px">
+      <h3>🃏 导入 SillyTavern 角色卡（PNG / v2 / v3 JSON，含内嵌世界书）</h3>
+      <div class="row">
+        <select v-model="selectedWorld"><option value="" disabled>选择世界…</option><option v-for="w in worlds" :key="w.id" :value="w.id">{{ w.title }}</option></select>
+        <label style="cursor:pointer">
+          <input type="file" accept=".png,.json" style="display:none" @change="onStFile">
+          <span class="tag" style="padding:6px 12px">📁 {{ stFileName || '选择角色卡文件（PNG/JSON）' }}</span>
+        </label>
         <button class="primary" :disabled="stBusy" @click="importStCard">{{ stBusy ? '导入中…' : '导入角色卡' }}</button>
       </div>
+      <textarea v-model="stJson" style="min-height:70px;margin-top:8px" placeholder="或直接粘贴角色卡 JSON"></textarea>
     </div>
 
     <div class="card">
       <h3>📚 导入独立世界书（ST entries JSON，与导出对称）</h3>
       <div class="row">
         <select v-model="wbWorld"><option value="" disabled>选择世界…</option><option v-for="w in worlds" :key="w.id" :value="w.id">{{ w.title }}</option></select>
-        <span class="dimmer">constant 条目入库为 lore:设定</span>
+        <label style="cursor:pointer">
+          <input type="file" accept=".json" style="display:none" @change="onWbFile">
+          <span class="tag" style="padding:6px 12px">📁 选择世界书 JSON 文件</span>
+        </label>
+        <span class="dimmer">支持 ST 标准导出与裸 entries 格式；constant 条目入库为 lore:设定</span>
       </div>
-      <textarea v-model="wbJson" style="min-height:80px;margin-top:8px" placeholder='{"entries": {"0": {"keys": ["魔法"], "content": "...", "constant": true, "enabled": true}}}'></textarea>
+      <textarea v-model="wbJson" style="min-height:70px;margin-top:8px" placeholder='或粘贴：{"entries": {...}} / 裸 entries 对象 / 数组'></textarea>
       <div class="row" style="margin-top:8px">
         <button class="primary" :disabled="wbBusy" @click="importWorldbook">{{ wbBusy ? '导入中…' : '导入世界书' }}</button>
       </div>
