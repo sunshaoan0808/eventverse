@@ -28,7 +28,7 @@ onMounted(async () => {
 <template>
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand"><img src="/icon.svg">EventVerse 叙界</div>
+      <div class="brand"><img src="/icon.svg">EventVerse 事界</div>
       <div class="nav-item" :class="{ active: view === 'worlds' }" @click="view = 'worlds'">🏠 书架</div>
       <div class="nav-item" :class="{ active: view === 'workbench' }" @click="view = 'workbench'">📖 世界工作台</div>
       <div class="nav-item" :class="{ active: view === 'sessions' }" @click="view = 'sessions'">💬 会话（玩/写）</div>
