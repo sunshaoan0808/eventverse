@@ -309,7 +309,7 @@ route('POST', '/api/jobs/:id/resume', ctx => {
   importNovel(store, ws, jobs, {
     worldId: old.worldId!, workTitle: b.title || old.label.replace(/^拆书：/, ''), text: String(b.text),
     baseYear: b.baseYear != null ? Number(b.baseYear) : undefined,
-    extractorProvider: ws.providerFor('extractor'), adversarialProvider: ws.providerFor('adversarial'),
+    extractorProvider: ws.providerFor('extractor'), fallbackExtractorProvider: ws.providerFor('chat'), adversarialProvider: ws.providerFor('adversarial'),
     llmChapterBudget: b.llmChapterBudget != null ? Number(b.llmChapterBudget) : undefined,
     jobId: job.id, resume: { workId, cursor },
   }).catch(() => { /* job 已记录错误 */ });
@@ -583,6 +583,15 @@ route('POST', '/api/sessions/:id/rewrite', async ctx => {
   ctx.res.end();
 });
 
+// 删除世界（级联：事件/提案/Guidance/作品/章节）
+route('DELETE', '/api/worlds/:id', ctx => {
+  const id = ctx.params.id;
+  if (id === 'demo') return json(ctx.res, { error: '演示世界不可删除' }, 403);
+  for (const w of store.listWorks(id)) ws.deleteWorkDir(w.id);
+  store.deleteWorldCascade(id);
+  json(ctx.res, { ok: true });
+});
+
 // 带工具对话（读侧自由，agent loop）
 route('POST', '/api/chat', async ctx => {
   sseInit(ctx.res);
@@ -602,6 +611,11 @@ route('POST', '/api/chat', async ctx => {
 route('POST', '/api/import', async ctx => {
   const worldId = String(ctx.body.worldId ?? '');
   if (!worldId) return json(ctx.res, { error: 'worldId required' }, 400);
+  const text = String(ctx.body.text ?? '');
+  const bad = (text.match(/\uFFFD/g) || []).length;
+  if (bad > text.length * 0.005) {
+    return json(ctx.res, { error: `文本含 ${bad} 处乱码（疑似 GBK 编码被按 UTF-8 读取）。请用书架页的"选择 TXT 文件"上传（自动识别编码），或重新以 UTF-8 粘贴。` }, 400);
+  }
   const running = jobs.list().find(j => j.kind === 'import' && j.worldId === worldId && (j.status === 'queued' || j.status === 'running'));
   if (running) return json(ctx.res, { error: `该世界已有进行中的导入任务 ${running.id}`, jobId: running.id }, 409);
   const job = jobs.create('import', { worldId, label: `拆书：${ctx.body.title ?? ''}` });
@@ -617,7 +631,7 @@ route('POST', '/api/import', async ctx => {
   importNovel(store, ws, jobs, {
     worldId, workTitle: ctx.body.title || '导入作品', text: String(ctx.body.text ?? ''),
     baseYear: ctx.body.baseYear != null ? Number(ctx.body.baseYear) : undefined,
-    extractorProvider: ws.providerFor('extractor'), adversarialProvider: ws.providerFor('adversarial'),
+    extractorProvider: ws.providerFor('extractor'), fallbackExtractorProvider: ws.providerFor('chat'), adversarialProvider: ws.providerFor('adversarial'),
     llmChapterBudget: ctx.body.llmChapterBudget != null ? Number(ctx.body.llmChapterBudget) : undefined,
     jobId: job.id,
   }).catch(() => { /* job 已记录错误 */ });

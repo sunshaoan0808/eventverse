@@ -43,15 +43,21 @@ export function directorSystemPrompt(opts: {
 }
 
 export function extractorSystemPrompt(): string {
-  return `你是事实抽取器。从给定的小说文本中抽取结构化事件，输出 JSON：
-{"events":[{"kind":"char.create|char.update|char.death|relation.set|fact.set|location.move|item.create|foreshadow.plant|foreshadow.recover","payload":{...},"worldTimeHint":"文中相对时间表达或空"}]}
-规则：
-- 只抽取文中明确发生的事实，不推测。
-- 人物名用文中名字（将作为 id 与 name）。
-- relation.set 的 type 用简洁中文（恋人/敌对/师徒/父子…）。
-- fact.set 的 key 用 "setting:主题" 格式。
-- 世界设定（王朝、地理、规则）用 fact.set。
-- 明显为后文埋的悬念用 foreshadow.plant。`;
+  return `你是小说事实抽取器。从给定文本抽取结构化事件，输出 JSON（不要输出任何解释）：
+{"events":[
+ {"kind":"char.create","payload":{"id":"人名","name":"人名","gender":"男|女","attrs":{"身份":"..."}}},
+ {"kind":"relation.set","payload":{"id":"r1","from":"人名A","to":"人名B","type":"恋人|同学|师徒|父子等","validFrom":0}},
+ {"kind":"fact.set","payload":{"key":"setting:主题","value":"中文事实","validFrom":0}},
+ {"kind":"location.move","payload":{"charId":"人名","place":"中文地点"}},
+ {"kind":"char.death","payload":{"id":"人名"}},
+ {"kind":"foreshadow.plant","payload":{"id":"f1","description":"中文悬念"}}
+]}
+硬性规则：
+1. payload 字段名必须与上面完全一致：关系用 from/to（不是 source/target），移动用 charId/place（不是 character/location）。
+2. 人名必须原样来自文本中出现过的人物（郭靖、黄蓉这类真实登场者），禁止编造或猜测。
+3. value/description/place 一律中文。
+4. 只抽文本明确写出的；没有事件就输出 {"events":[]}。
+5. 数字人名同样抽取（如"人物7"）。`;
 }
 
 export function adversarialSystemPrompt(): string {

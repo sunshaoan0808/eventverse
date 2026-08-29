@@ -109,6 +109,20 @@ async function createWorld() {
   emit('refresh');
 }
 
+function decodeTxt(buf: Uint8Array): string {
+  const utf8 = new TextDecoder('utf-8').decode(buf);
+  const bad = (utf8.match(/\uFFFD/g) || []).length;
+  if (bad > buf.length * 0.001) { try { return new TextDecoder('gbk').decode(buf); } catch { /* 忽略 */ } }
+  return utf8;
+}
+
+async function onNovelFile(e: Event) {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  importTitle.value = f.name.replace(/\.txt$/i, '');
+  importText.value = decodeTxt(new Uint8Array(await f.arrayBuffer()));
+}
+
 async function importNovel() {
   if (!importText.value.trim() || !selectedWorld.value) return;
   importBusy.value = true;
@@ -220,6 +234,7 @@ function exportWb() {
           <option v-for="w in worlds" :key="w.id" :value="w.id">{{ w.title }}</option>
         </select>
         <input v-model="importTitle" placeholder="书名">
+        <label style="cursor:pointer"><input type="file" accept=".txt" style="display:none" @change="onNovelFile"><span class="tag" style="padding:6px 12px">📁 选择 TXT（自动识别 GBK/UTF-8）</span></label>
         <input v-model="importYear" style="min-width:90px" title="开篇对应的世界年">
         <button class="primary" :disabled="importBusy" @click="importNovel">{{ importBusy ? '拆书中…' : '导入 TXT' }}</button>
         <button @click="exportWb">导出世界书(ST)</button>

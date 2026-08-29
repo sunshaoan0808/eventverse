@@ -224,6 +224,22 @@ export class EventStore {
     return { copied: seq };
   }
 
+  /** 级联删除世界（事件/提案/Guidance/作品/章节元数据）。正文目录由上层 Workspace 清理。 */
+  deleteWorldCascade(worldId: string) {
+    this.db.prepare('DELETE FROM events WHERE world_id=?').run(worldId);
+    this.db.prepare('DELETE FROM proposals WHERE world_id=?').run(worldId);
+    this.db.prepare('DELETE FROM guidance WHERE world_id=?').run(worldId);
+    this.db.prepare('DELETE FROM usage_log WHERE world_id=?').run(worldId);
+    this.db.prepare('DELETE FROM prompt_overrides WHERE world_id=?').run(worldId);
+    for (const w of this.listWorks(worldId)) {
+      this.db.prepare('DELETE FROM chapters WHERE work_id=?').run(w.id);
+      this.db.prepare('DELETE FROM works WHERE id=?').run(w.id);
+    }
+    this.db.prepare('DELETE FROM worlds WHERE id=?').run(worldId);
+    this.eventsCache.delete(worldId);
+    this.stateCache.delete(worldId);
+  }
+
   // ---------- 四视图（MD 1.2） ----------
 
   stateAt(worldId: string, upto?: { worldTime?: number; sequence?: number }): WorldState {

@@ -9,6 +9,23 @@ const CHAPTER_PATTERNS = [
   /^[ \t]*(序章|楔子|尾声|后记|番外[^\n]{0,20})$/gm,
 ];
 
+// 嵌入式标题：部分 txt 源把"第X章标题"粘在段落末尾（无换行）。
+// 规则：标题全为短汉字串（≤12 字、无标点），且第字前一个字不是常见引用动词/助词（排除"翻到第三章就…"这类行文引用）。
+const EMBED_HEADING = /第[零一二三四五六七八九十百千万0-9]{1,6}[章回节][\u4e00-\u9fa5]{1,10}(?=\n|$)/g;
+const PREV_EXCLUDE = new Set(['在', '是', '到', '说', '的', '了', '看', '读', '写', '讲', '翻', '跳', '这', '那', '记', '提', '写', '给', '和', '与', '章']);
+
+function embeddedMarks(text: string): Array<{ title: string; start: number }> {
+  const out: Array<{ title: string; start: number }> = [];
+  EMBED_HEADING.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = EMBED_HEADING.exec(text)) !== null) {
+    const prev = text[m.index - 1];
+    if (prev && PREV_EXCLUDE.has(prev)) continue;
+    out.push({ title: m[0], start: m.index });
+  }
+  return out;
+}
+
 export function splitChapters(text: string, opts: { windowChars?: number } = {}): SplitChapter[] {
   const normalized = text.replace(/\r\n/g, '\n');
   // 中文标记（第X章 + 楔子/序章等）合并收集；英文 Chapter 独立
@@ -23,6 +40,7 @@ export function splitChapters(text: string, opts: { windowChars?: number } = {})
   };
   let marks = collect([CHAPTER_PATTERNS[0], CHAPTER_PATTERNS[2]]);
   if (marks.length < 2) marks = collect([CHAPTER_PATTERNS[1]]);
+  if (marks.length < 2) marks = embeddedMarks(normalized); // ★行首匹配失败 → 嵌入式标题兜底
   if (marks.length < 2) {
     // 字数窗降级
     const win = opts.windowChars ?? 6000;
