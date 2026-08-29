@@ -80,6 +80,19 @@ Docker：`docker compose up -d --build`（amd64/arm64）。
 - API Key 使用 AES-256-GCM 加密，密钥文件 `master.key` 不离开数据目录；
 - `settings.json` 只存密文（vault），接口不回传明文。
 
+## 模型接入示例：Zen Free Gateway（本地免费网关）
+
+配合 Zen Free Gateway（OpenAI 兼容的本地免费模型网关，内置 deepseek/laguna/nemotron 等免费模型）：
+
+```bash
+node scripts/setup-zen-providers.mjs   # 一键把导演/抽取/对抗审/chat 接到 http://127.0.0.1:9527/v1
+node scripts/verify-real-llm.mjs       # 真实模型端到端验证（RP 一轮 + 世界问答）
+```
+
+- 渲染层建议配强模型（免费网关当前存活：`nemotron-3-ultra-free`、`laguna-s-2.1-free`；可用模型以 `GET :9527/v1/models` 为准）
+- 部分推理模型经工具循环后 content 为空，引擎已内置"直接作答"兜底
+- 稳定性：`npm start` 走 `watchdog.mjs`，进程意外退出自动拉起
+
 ## 文档
 
 - [HTTP API 全量参考](docs/API.md)

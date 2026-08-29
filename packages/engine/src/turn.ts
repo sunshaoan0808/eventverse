@@ -462,9 +462,17 @@ export async function runToolChat(deps: EngineDeps, ctx: ToolContext, messages: 
     const res = await callLLM(chatP, msgs, { tools: toolSpecs(), temperature: 0.7, maxTokens: 2000 });
     logUsage(deps, ctx.worldId, 'toolchat', chatP, res.usage);
     if (!res.toolCalls.length) {
-      emit({ type: 'content', data: res.content });
+      // 兜底：部分推理模型经工具循环后 content 为空 → 追加一次"直接作答"调用
+      let content = res.content;
+      if (!content.trim() && used.length) {
+        msgs.push({ role: 'user', content: '请基于以上工具查询结果直接回答用户的最新问题，不要再说需要查询。' });
+        const r2 = await callLLM(chatP, msgs, { temperature: 0.5, maxTokens: 1500 });
+        logUsage(deps, ctx.worldId, 'toolchat-final', chatP, r2.usage);
+        content = r2.content || content;
+      }
+      emit({ type: 'content', data: content });
       emit({ type: 'done', data: { toolCalls: used } });
-      return { content: res.content, toolCalls: used };
+      return { content, toolCalls: used };
     }
     msgs.push({ role: 'assistant', content: res.content, tool_calls: res.toolCalls });
     for (const tc of res.toolCalls) {
