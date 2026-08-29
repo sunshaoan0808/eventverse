@@ -17,6 +17,8 @@ export interface ImportOptions {
   llmChapterBudget?: number;
   /** 主抽取模型失败/空结果时的回退模型（免费节点轮动时提升成功率） */
   fallbackExtractorProvider?: ProviderConfig;
+  /** 人物档案补全用的模型（chat 角色） */
+  chatProvider?: ProviderConfig;
   /** 复用外部已创建的 job（HTTP 层先返回 jobId 再异步执行） */
   jobId?: string;
   /** 断点续跑：复用既有 workId，跳过 cursor 之前的章节（MD §2.4） */
@@ -73,6 +75,20 @@ export async function importNovel(store: EventStore, ws: Workspace, jobs: JobReg
       let events = i < budget
         ? await llmExtract(opts.extractorProvider, ch.body, times[i], signal, globalSeen, seedNames, opts.text, opts.fallbackExtractorProvider)
         : [];
+      // 双模型补抽（MD §9 模型波动对策）：主模型产出缺关系/事实/伏笔时，用回退模型再抽一轮合并
+      if (i < budget && opts.fallbackExtractorProvider) {
+        const kinds = new Set(events.map(e => e.kind));
+        if (!kinds.has('relation.set') && !kinds.has('fact.set') && !kinds.has('foreshadow.plant')) {
+          const more = await llmExtract(opts.fallbackExtractorProvider, ch.body, times[i], signal, new Set(), seedNames, opts.text, opts.extractorProvider);
+          for (const e of more) {
+            if (e.kind === 'char.create') {
+              const nm = (e.payload as any)?.name;
+              if (nm && (globalSeen?.has(nm) || events.some(x => x.kind === 'char.create' && (x.payload as any)?.name === nm))) continue;
+            }
+            events.push(e);
+          }
+        }
+      }
       if (!events.length) events = heuristicExtract(ch.body, times[i], globalSeen, seedNames);
 
       if (events.length) {
@@ -95,6 +111,12 @@ export async function importNovel(store: EventStore, ws: Workspace, jobs: JobReg
       jobs.tick(job.id, { progress: i + 1, cursor: i + 1, label: `拆书 ${i + 1}/${split.length}：${ch.title}` });
     }
     jobs.done(job.id, { workId, chapters: split.length, proposals: proposals.length, applied, resumedFrom: resumeFrom || undefined });
+
+    // ② 人物档案补全：给出场 ≥5 次的主角填身份/性格/外貌（MD「人物设定」体验）
+    try {
+      const enriched = await enrichCharacters(store, opts, jobs, signal);
+      jobs.tick(job.id, { label: `人物档案补全 ${enriched} 人` });
+    } catch { /* 补全失败不影响导入 */ }
     return { workId, chapters: split.length, proposals, eventsDirect, resumedFrom: resumeFrom || undefined };
   } catch (e: any) {
     jobs.fail(job.id, String(e?.message ?? e));
@@ -147,6 +169,48 @@ async function llmExtractOnce(provider: ProviderConfig, body: string, worldTime:
   } catch {
     return [];
   }
+}
+
+/** ② 人物档案补全：为主角（出场 ≥5 次，最多 12 人）生成身份/性格/外貌档案 */
+async function enrichCharacters(store: EventStore, opts: ImportOptions, jobs: JobRegistry, signal?: AbortSignal): Promise<number> {
+  const state = store.stateAt(opts.worldId);
+  const provider = opts.chatProvider ?? opts.fallbackExtractorProvider ?? opts.extractorProvider;
+  const chars = Object.values(state.characters)
+    .filter(c => opts.text.split(c.name).length - 1 >= 5)
+    .sort((a, b) => opts.text.split(b.name).length - opts.text.split(a.name).length)
+    .slice(0, 12);
+  let n = 0;
+  const baseT = Number.isFinite(state.asOf.worldTime) ? state.asOf.worldTime : (opts.baseYear ?? 1000);
+  for (const c of chars) {
+    if (signal?.aborted) break;
+    const ctxs: string[] = [];
+    let idx = 0;
+    for (let k = 0; k < 3; k++) {
+      const i = opts.text.indexOf(c.name, idx);
+      if (i < 0) break;
+      ctxs.push(opts.text.slice(Math.max(0, i - 250), i + 350));
+      idx = i + c.name.length;
+    }
+    if (!ctxs.length) continue;
+    try {
+      const res = await callLLM(provider, [
+        { role: 'system', content: '你是人物档案员。根据小说文本片段为指定人物填写档案。只输出 JSON：{"身份":"...","性格":"...","外貌":"..."}。全部中文，依据文本而非想象，未知字段填空字符串。' },
+        { role: 'user', content: `人物：${c.name}\n\n${ctxs.join('\n---\n')}` },
+      ], { temperature: 0.2, maxTokens: 400, signal });
+      const prof = extractJson(res.content);
+      if (!prof) continue;
+      const attrs: Record<string, string> = {};
+      for (const k of ['身份', '性格', '外貌']) if (prof[k]) attrs[k] = String(prof[k]).slice(0, 150);
+      if (!Object.keys(attrs).length) continue;
+      store.append({
+        worldId: opts.worldId, actor: 'agent', worldTime: baseT, kind: 'char.update',
+        payload: { id: c.id, patch: { attrs } }, sourceRef: 'enrich',
+        review: { status: 'approved', by: 'enrich' },
+      });
+      n++;
+    } catch { /* 单人失败不阻断 */ }
+  }
+  return n;
 }
 
 /** 载荷别名归一：免费小模型常见字段错位 → 引擎标准字段（types.ts schema） */

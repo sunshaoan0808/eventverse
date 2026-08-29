@@ -309,7 +309,7 @@ route('POST', '/api/jobs/:id/resume', ctx => {
   importNovel(store, ws, jobs, {
     worldId: old.worldId!, workTitle: b.title || old.label.replace(/^拆书：/, ''), text: String(b.text),
     baseYear: b.baseYear != null ? Number(b.baseYear) : undefined,
-    extractorProvider: ws.providerFor('extractor'), fallbackExtractorProvider: ws.providerFor('chat'), adversarialProvider: ws.providerFor('adversarial'),
+    extractorProvider: ws.providerFor('extractor'), fallbackExtractorProvider: ws.providerFor('chat'), chatProvider: ws.providerFor('chat'), adversarialProvider: ws.providerFor('adversarial'),
     llmChapterBudget: b.llmChapterBudget != null ? Number(b.llmChapterBudget) : undefined,
     jobId: job.id, resume: { workId, cursor },
   }).catch(() => { /* job 已记录错误 */ });
@@ -418,36 +418,62 @@ route('POST', '/api/works/:id/finalize', async ctx => {
 
 // proposals（审核队列）
 route('GET', '/api/worlds/:id/proposals', ctx => json(ctx.res, store.listProposals(ctx.params.id, ctx.query.get('status') ?? undefined)));
-route('POST', '/api/proposals/:id/approve', ctx => {
-  const p = store.getProposal(ctx.params.id);
-  if (!p) return json(ctx.res, { error: 'not found' }, 404);
-  // 乐观锁重校验（MD 2.2 expectedVersionNo 思路）：提案基线之后世界已推进 → 重新归一化+校验，失败则 409
+/** 单条批准（含乐观锁引用重校验 + 按需建册）；单条路由与批量审核共用 */
+function approveChecked(p: import('@eventverse/core').Proposal): { ok: boolean; applied: number; reason?: string } {
   if (p.baseSeq != null) {
     const cur = (store.db.prepare('SELECT MAX(sequence) AS m FROM events WHERE world_id=?').get(p.worldId) as any)?.m ?? 0;
     if (cur > p.baseSeq) {
-      const { events, notes } = normalizeRefs(store, p.worldId, (p.events as any[]).map((e: any) => ({
+      const { events } = normalizeRefs(store, p.worldId, (p.events as any[]).map((e: any) => ({
         worldId: e.worldId, workId: e.workId, worldTime: e.worldTime, actor: 'agent' as const,
         kind: e.kind, payload: e.payload, visibility: e.visibility,
       })));
-      const recheck = autoValidate(store, p.worldId, events);
-      if (!recheck.ok) return json(ctx.res, { error: '世界状态已变化，提案与新状态冲突，请重新处理', issues: recheck.issues, notes }, 409);
+      // 按需建册：关系/移动引用了未登记角色 → 先补人物 stub（跨章时序的常见情况，关系有效性优先）
+      const st0 = store.stateAt(p.worldId);
+      const known = new Set<string>([...Object.keys(st0.characters)]);
+      for (const e of events) if (e.kind === 'char.create') known.add(String((e.payload as any)?.id ?? (e.payload as any)?.name ?? ''));
+      const stubs: any[] = [];
+      for (const e of events) {
+        const p2: any = e.payload ?? {};
+        for (const n of [p2.from, p2.to, p2.charId]) {
+          if (typeof n === 'string' && n && !known.has(n)) {
+            known.add(n);
+            stubs.push({ worldId: e.worldId, workId: e.workId, worldTime: e.worldTime, actor: 'agent', kind: 'char.create', payload: { id: n, name: n, attrs: { 来源: '按需建册' } }, visibility: e.visibility ?? { knowers: '*', scope: 'public' } });
+          }
+        }
+      }
+      if (stubs.length) (p.events as any[]).unshift(...stubs);
+      const recheck = autoValidate(store, p.worldId, (p.events as any[]).map((e: any) => ({
+        worldId: e.worldId, workId: e.workId, worldTime: e.worldTime, actor: 'agent' as const,
+        kind: e.kind, payload: e.payload, visibility: e.visibility,
+      })));
+      if (!recheck.ok) return { ok: false, applied: 0, reason: 'stale-conflict' };
+      if (stubs.length) store.saveProposal({ ...p, events: p.events });
     }
   }
-  store.setProposalStatus(ctx.params.id, 'approved');
-  const applied = store.applyProposal(ctx.params.id);
-  json(ctx.res, { ok: true, applied: applied.length });
+  store.setProposalStatus(p.id, 'approved');
+  const applied = store.applyProposal(p.id);
+  return { ok: true, applied: applied.length };
+}
+
+route('POST', '/api/proposals/:id/approve', ctx => {
+  const p = store.getProposal(ctx.params.id);
+  if (!p) return json(ctx.res, { error: 'not found' }, 404);
+  const r = approveChecked(p);
+  if (!r.ok) return json(ctx.res, { error: '世界状态已变化，提案与新状态冲突，请重新处理', reason: r.reason }, 409);
+  json(ctx.res, { ok: true, applied: r.applied });
 });
 route('POST', '/api/proposals/:id/reject', ctx => { store.setProposalStatus(ctx.params.id, 'rejected'); json(ctx.res, { ok: true }); });
-// 批量审核（提案洪水场景：一键处理全部待审）
+// 批量审核（一键处理全部待审；批准复用单条同一套引用重校验，坏引用自动跳过）
 route('POST', '/api/worlds/:id/proposals/batch', ctx => {
   const action = ctx.body.action === 'reject' ? 'rejected' : 'approved';
   const pend = store.listProposals(ctx.params.id, 'pending');
-  let done = 0;
+  let done = 0, applied = 0, skipped = 0;
   for (const p of pend) {
-    store.setProposalStatus(p.id, action);
-    if (action === 'approved') done += store.applyProposal(p.id).length;
+    if (action === 'rejected') { store.setProposalStatus(p.id, 'rejected'); done++; continue; }
+    const r = approveChecked(p);
+    if (r.ok) { done++; applied += r.applied; } else skipped++;
   }
-  json(ctx.res, { ok: true, action, proposals: pend.length, eventsApplied: done });
+  json(ctx.res, { ok: true, action, proposals: done, eventsApplied: applied, skipped });
 });
 
 // guidance
@@ -631,7 +657,7 @@ route('POST', '/api/import', async ctx => {
   importNovel(store, ws, jobs, {
     worldId, workTitle: ctx.body.title || '导入作品', text: String(ctx.body.text ?? ''),
     baseYear: ctx.body.baseYear != null ? Number(ctx.body.baseYear) : undefined,
-    extractorProvider: ws.providerFor('extractor'), fallbackExtractorProvider: ws.providerFor('chat'), adversarialProvider: ws.providerFor('adversarial'),
+    extractorProvider: ws.providerFor('extractor'), fallbackExtractorProvider: ws.providerFor('chat'), chatProvider: ws.providerFor('chat'), adversarialProvider: ws.providerFor('adversarial'),
     llmChapterBudget: ctx.body.llmChapterBudget != null ? Number(ctx.body.llmChapterBudget) : undefined,
     jobId: job.id,
   }).catch(() => { /* job 已记录错误 */ });

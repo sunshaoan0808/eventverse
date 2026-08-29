@@ -62,21 +62,29 @@ export async function executeTool(ctx: ToolContext, name: string, args: any): Pr
       return truncate(out.join('\n\n'));
     }
     case 'grep': {
-      const kw = String(args.keyword ?? '');
+      const kwRaw = String(args.keyword ?? '').trim();
       const limit = args.limit ?? 8;
+      // 分词任一命中（模型常给多词查询；字面整体命中优先排序）
+      const tokens = kwRaw.split(/\s+|，|,|\s/).map(t => t.trim()).filter(t => t.length >= 2);
+      const kws = tokens.length ? tokens : [kwRaw];
       const hits: string[] = [];
+      const scored: Array<{ line: string; score: number }> = [];
       for (const w of store.listWorks(worldId)) {
         for (const c of store.listChapters(w.id)) {
           const body = ws.readChapterBody(w.id, c.id);
           if (!body) continue;
-          const idx = body.indexOf(kw);
-          if (idx >= 0) {
-            hits.push(`[${c.id}] ${c.title}：…${body.slice(Math.max(0, idx - 40), idx + 60).replace(/\n/g, ' ')}…`);
-            if (hits.length >= limit) return truncate(hits.join('\n'));
+          const hitCount = kws.filter(k => body.includes(k)).length;
+          if (hitCount > 0) {
+            const idx = body.indexOf(kws.find(k => body.includes(k))!);
+            scored.push({
+              line: `[${c.id}] ${c.title}（${hitCount}/${kws.length} 词命中）：…${body.slice(Math.max(0, idx - 40), idx + 80).replace(/\n/g, ' ')}…`,
+              score: hitCount,
+            });
           }
         }
       }
-      return hits.length ? truncate(hits.join('\n')) : `未命中 "${kw}"`;
+      scored.sort((a, b) => b.score - a.score);
+      return scored.length ? truncate(scored.slice(0, limit).map(s => s.line).join('\n')) : `未命中 ${JSON.stringify(kws)}`;
     }
     case 'search_entities': {
       const q = String(args.query ?? '');
