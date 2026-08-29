@@ -621,14 +621,17 @@ route('DELETE', '/api/worlds/:id', ctx => {
 // 带工具对话（读侧自由，agent loop）
 route('POST', '/api/chat', async ctx => {
   sseInit(ctx.res);
+  const chatWorldId = ctx.body.worldId;
+  const worldTitle = store.listWorlds().find(w => w.id === chatWorldId)?.title ?? chatWorldId;
   const toolCtx: ToolContext = {
-    store, ws, worldId: ctx.body.worldId, workId: ctx.body.workId ?? null,
+    store, ws, worldId: chatWorldId, workId: ctx.body.workId ?? null,
     viewerCharId: ctx.body.viewerCharId ?? null,
     adversarialProvider: deps.adversarialProvider(), sourceLabel: 'chat',
   };
   try {
     const history = ((ctx.body.history ?? []) as any[]).map(h => ({ role: h.role ?? 'user', content: String(h.content ?? '') }));
-    await runToolChat(deps, toolCtx, [...history, { role: 'user', content: String(ctx.body.message ?? '') }], e => sseSend(ctx.res, e.type, e.data ?? {}));
+    const system = `你是「事界」的世界问答助手，当前管理的世界：《${worldTitle}》。\n你拥有查询这个世界真实事实的工具：story_index（章节结构）、read_chapters（读正文）、grep（关键词检索）、search_entities（人物/关系/设定/伏笔检索）、recall（角色视角）。\n规则：回答前先调用工具检索依据；人名关系等一律以工具结果为准，不要凭空编造；用中文回答。`;
+    await runToolChat(deps, toolCtx, [{ role: 'system', content: system }, ...history, { role: 'user', content: String(ctx.body.message ?? '') }], e => sseSend(ctx.res, e.type, e.data ?? {}));
   } catch (e: any) { sseSend(ctx.res, 'error', { message: String(e?.message ?? e) }); }
   ctx.res.end();
 });

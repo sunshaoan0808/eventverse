@@ -23,6 +23,7 @@ async function ask() {
       if (e.event === 'tool') live.tools.push(`🔧 ${e.data.name}`);
       if (e.event === 'tool_result') live.tools.push(`✓ ${e.data.name}`);
       if (e.event === 'content') live.content = e.data;
+      if (e.event === 'error') live.content = `⚠️ ${e.data.message ?? '查询失败'}`;
       if (e.event === 'done') live.budget = e.data.budgetExhausted ? '工具预算用尽' : null;
       log.value = [...log.value];
     });
