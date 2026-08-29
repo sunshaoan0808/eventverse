@@ -42,7 +42,7 @@ function pngWithCard(cardJson) {
   let t = '';
   for (let c = 1; c <= 12; c++) {
     t += `第${c}章 行路${c}\n`;
-    for (let n = 0; n < 6; n++) t += `人物${(c * 7 + n) % 80}说：我们赶路。\n`;
+    for (let n = 0; n < 6; n++) t += `${['李明', '王强', '张伟', '刘洋', '陈杰', '赵刚'][(c + n) % 6]}说：我们赶路。\n`;
   }
   const imp = await post('/api/import', { worldId: w, title: '洪水治理验证', text: t, llmChapterBudget: 0 });
   await new Promise(r => setTimeout(r, 8000));
@@ -54,7 +54,7 @@ function pngWithCard(cardJson) {
   ok('③ 待审积压为 0（修复前会堆 ~12 条）', pend.length === 0);
   const st2 = (await j('/api/worlds/' + w + '/state'))[1];
   const charNames = Object.values(st2.characters).map(c => c.name);
-  ok('③ 人物已自动入库（含数字人名）', charNames.some(n => /^人物\d+$/.test(n)));
+  ok('③ 人物已自动入库（对话归属白名单）', charNames.some(n => ['李明', '王强', '张伟', '刘洋', '陈杰', '赵刚'].includes(n)));
   ok('③ 跨章去重（人物唯一）', new Set(Object.keys(st2.characters)).size === Object.keys(st2.characters).length);
 
   console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
