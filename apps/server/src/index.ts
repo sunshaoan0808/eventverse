@@ -10,7 +10,8 @@ import { PackStore, StoryPack, packPlayable, newPackId, newNodeId } from '@event
 import { parseSTCard, extractCardFromPng, normalizeWorldBook, exportWorldBookFromFacts, ProviderConfig, newId, timeLabel, callLLM, extractJson } from '@eventverse/adapters';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = process.env.EVENTVERSE_DATA ?? join(__dirname, '../../data');
+// 数据目录 = 项目根 data/（dist 在 apps/server/dist，回退三级）；与 Docker 卷 ./data 对应
+const DATA_DIR = process.env.EVENTVERSE_DATA ?? join(__dirname, '../../../data');
 const PORT = Number(process.env.EVENTVERSE_PORT ?? 18700);
 const HOST = process.env.EVENTVERSE_HOST ?? '127.0.0.1';
 const WEB_DIST = process.env.EVENTVERSE_WEB ?? join(__dirname, '../../web/dist');
